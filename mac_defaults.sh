@@ -1,9 +1,9 @@
 defaults write com.apple.dock "orientation" -string "left"
-defaults write com.apple.dock "tilesize" -int "32"
+defaults write com.apple.dock "tilesize" -int "28"
 defaults write com.apple.dock "autohide-time-modifier" -float "0.2"
 defaults write com.apple.dock "autohide-delay" -float "0.1"
 defaults write com.apple.dock "autohide" -bool "true"
-defaults write com.apple.dock "mru-spaces" -bool "false" 
+defaults write com.apple.dock "mru-spaces" -bool "false"
 defaults write com.apple.dock "show-recents" -bool "false"
 killall Dock
 
