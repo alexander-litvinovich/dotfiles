@@ -4,7 +4,6 @@
 #   Continue config
 #
 
-
 CURRENT_DIR=$(pwd)
 CONTINUE_DIR="$HOME/.continue"
 CONFIG_FILE="config.json"
@@ -30,7 +29,7 @@ backup_config() {
 }
 
 create_symlink() {
-    ln -s "$CURRENT_DIR/$SYMLINK_NAME" "$CONTINUE_DIR/$CONFIG_FILE" 
+    ln -s "$CURRENT_DIR/$SYMLINK_NAME" "$CONTINUE_DIR/$CONFIG_FILE"
     echo "Symlink created: $SYMLINK_NAME -> $CONTINUE_DIR/$CONFIG_FILE"
 }
 
