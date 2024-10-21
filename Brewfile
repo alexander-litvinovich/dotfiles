@@ -13,21 +13,22 @@ brew 'git'
 brew 'coreutils'
 
 # Apps
-cask 'google-chrome'
-cask 'visual-studio-code'
-cask 'figma'
-cask 'the-unarchiver'
-cask 'iterm2'
-cask 'orbstack'
-cask 'chromium'
 cask 'appcleaner'
-
-
+cask 'iterm2'
+cask 'the-unarchiver'
 cask 'boop'
 cask 'deepl'
 cask 'raycast'
+
+cask 'figma'
+cask 'google-chrome'
+cask 'chromium'
+
+cask 'visual-studio-code'
+cask 'orbstack'
 cask 'postman'
-cask 'tableplus'
+cask 'pgadmin4'
+
 cask 'imageoptim'
 brew 'gifski'
 
