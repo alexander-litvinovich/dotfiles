@@ -29,6 +29,9 @@ cask 'orbstack'
 cask 'postman'
 cask 'pgadmin4'
 
+# Virtual screen for screen sharing
+cask 'deskpad'
+
 cask 'imageoptim'
 brew 'gifski'
 
