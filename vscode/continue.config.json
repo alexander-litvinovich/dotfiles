@@ -1,96 +1,95 @@
 {
-    "models": [
-        {
-            "title": "Codeqwen 1.5",
-            "provider": "ollama",
-            "model": "codeqwen"
-        },
-        {
-            "model": "claude-3-5-sonnet-20240620",
-            "provider": "anthropic",
-            "apiKey": "",
-            "title": "Claude 3.5 Sonnet"
-        },
-        {
-            "model": "AUTODETECT",
-            "title": "Autodetect",
-            "provider": "ollama"
-        }
-    ],
-    "tabAutocompleteModel": {
-        "title": "Tab Autocomplete",
-        "provider": "ollama",
-        "model": "codeqwen"
+  "models": [
+    {
+      "title": "Codeqwen 1.5",
+      "provider": "ollama",
+      "model": "codeqwen"
     },
-    "customCommands": [
-        {
-            "name": "test",
-            "prompt": "{{{ input }}}\n\nWrite a comprehensive set of unit tests for the selected code. It should setup, run tests that check for correctness including important edge cases, and teardown. Ensure that the tests are complete and sophisticated. Give the tests just as chat output, don't edit any file.",
-            "description": "Write unit tests for highlighted code"
-        },
-        {
-            "name": "explain",
-            "prompt": "{{{ input }}}\n\nWrite an comprehensive explanation for the selected code. Give the explanation just as chat output, don't edit any file.",
-            "description": "Explain highlighted code"
-        }
-    ],
-    "allowAnonymousTelemetry": false,
-    "embeddingsProvider": {
-        "provider": "ollama"
+    {
+      "model": "claude-3-5-sonnet-20240620",
+      "provider": "anthropic",
+      "apiKey": "",
+      "title": "Claude 3.5 Sonnet"
     },
-    "reranker": {
-        "name": "llm"
+    {
+      "model": "AUTODETECT",
+      "title": "Autodetect",
+      "provider": "ollama"
+    }
+  ],
+  "tabAutocompleteModel": {
+    "title": "Tab Autocomplete",
+    "provider": "ollama",
+    "model": "codeqwen"
+  },
+  "customCommands": [
+    {
+      "name": "test",
+      "prompt": "{{{ input }}}\n\nWrite a comprehensive set of unit tests for the selected code. It should setup, run tests that check for correctness including important edge cases, and teardown. Ensure that the tests are complete and sophisticated. Give the tests just as chat output, don't edit any file.",
+      "description": "Write unit tests for highlighted code"
     },
-    "contextProviders": [
-        {
-            "name": "code",
-            "params": {}
-        },
-        {
-            "name": "docs",
-            "params": {}
-        },
-        {
-            "name": "diff",
-            "params": {}
-        },
-        {
-            "name": "terminal",
-            "params": {}
-        },
-        {
-            "name": "problems",
-            "params": {}
-        },
-        {
-            "name": "folder",
-            "params": {}
-        },
-        {
-            "name": "codebase",
-            "params": {}
-        }
-    ],
-    "slashCommands": [
-        {
-            "name": "edit",
-            "description": "Edit selected code"
-        },
-        {
-            "name": "comment",
-            "description": "Write comments for the selected code"
-        },
-        {
-            "name": "share",
-            "description": "Export the current chat session to markdown"
-        },
-        {
-            "name": "cmd",
-            "description": "Generate a shell command"
-        },
-        {
-            "name": "commit",
-            "description": "Generate a git commit message"
-        }
-    ]
+    {
+      "name": "explain",
+      "prompt": "{{{ input }}}\n\nWrite an comprehensive explanation for the selected code. Give the explanation just as chat output, don't edit any file.",
+      "description": "Explain highlighted code"
+    }
+  ],
+  "embeddingsProvider": {
+    "provider": "ollama"
+  },
+  "reranker": {
+    "name": "llm"
+  },
+  "contextProviders": [
+    {
+      "name": "code",
+      "params": {}
+    },
+    {
+      "name": "docs",
+      "params": {}
+    },
+    {
+      "name": "diff",
+      "params": {}
+    },
+    {
+      "name": "terminal",
+      "params": {}
+    },
+    {
+      "name": "problems",
+      "params": {}
+    },
+    {
+      "name": "folder",
+      "params": {}
+    },
+    {
+      "name": "codebase",
+      "params": {}
+    }
+  ],
+  "slashCommands": [
+    {
+      "name": "edit",
+      "description": "Edit selected code"
+    },
+    {
+      "name": "comment",
+      "description": "Write comments for the selected code"
+    },
+    {
+      "name": "share",
+      "description": "Export the current chat session to markdown"
+    },
+    {
+      "name": "cmd",
+      "description": "Generate a shell command"
+    },
+    {
+      "name": "commit",
+      "description": "Generate a git commit message"
+    }
+  ]
 }
