@@ -19,3 +19,6 @@ defaults write com.apple.screencapture "location" -string "~/Pictures/Screenshot
 killall SystemUIServer
 
 defaults write com.apple.TimeMachine "DoNotOfferNewDisksForBackup" -bool "true"
+
+defaults write com.apple.WindowManager EnableStandardClickToShowDesktop -bool false
+killall -HUP WindowManager
