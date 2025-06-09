@@ -34,6 +34,8 @@ cask 'deskpad'
 
 cask 'imageoptim'
 brew 'gifski'
+cask 'jordanbaird-ice'
+cask 'menubar-countdown'
 
 # Quicklook
 cask 'qlmarkdown'
