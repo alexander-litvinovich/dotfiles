@@ -4,6 +4,8 @@ brew 'optipng'
 brew 'pngquant'
 brew 'svgo'
 brew 'gifsicle'
+brew 'tesseract'
+brew 'tesseract-lang'
 
 # Development
 brew 'imagemagick'
