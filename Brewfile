@@ -13,6 +13,7 @@ brew 'node'
 brew 'yarn'
 brew 'git'
 brew 'coreutils'
+brew 'tmux'
 
 # Apps
 cask 'appcleaner'
@@ -20,6 +21,7 @@ cask 'iterm2'
 cask 'the-unarchiver'
 cask 'boop'
 cask 'deepl'
+cask 'loop'
 cask 'raycast'
 
 cask 'figma'
@@ -37,7 +39,6 @@ cask 'deskpad'
 cask 'imageoptim'
 brew 'gifski'
 cask 'jordanbaird-ice'
-cask 'menubar-countdown'
 
 # Quicklook
 cask 'qlmarkdown'
