@@ -1,45 +1,68 @@
-# Spatie Medialibrary
+# ============================================================================
+# Brewfile - Homebrew Package Manifest
+# ============================================================================
+#
+# This file defines all packages, CLI tools, and applications to be installed
+# via Homebrew package manager for macOS development environment setup.
+#
+# Usage:
+#   brew bundle --file ./Brewfile         # Install all packages
+#   brew bundle cleanup --file ./Brewfile # Remove unlisted packages
+#   brew bundle check --file ./Brewfile   # Check installation status
+#
+# Package Types:
+#   - brew:  Command-line tools and libraries
+#   - cask:  GUI applications and fonts
+#
+# ============================================================================
+
+# Shell
+brew 'zsh' # Shell
+brew 'git' # Version control system
+brew 'coreutils' # Core utilities
+brew 'tmux' # Terminal multiplexer
+
+# Image Processing
+cask 'imageoptim'
 brew 'jpegoptim'
 brew 'optipng'
 brew 'pngquant'
-brew 'svgo'
+brew 'imagemagick'
 brew 'gifsicle'
+brew 'svgo'
+
+# OCR
 brew 'tesseract'
 brew 'tesseract-lang'
 
 # Development
-brew 'imagemagick'
 brew 'node'
 brew 'yarn'
-brew 'git'
-brew 'coreutils'
-brew 'tmux'
+cask 'visual-studio-code'
+cask 'orbstack'
 
 # Apps
-cask 'appcleaner'
-cask 'iterm2'
-cask 'the-unarchiver'
 cask 'boop'
-cask 'deepl'
-cask 'loop'
-cask 'raycast'
+brew 'gifski'
 
-cask 'figma'
+# Browsers
 cask 'google-chrome'
 cask 'chromium'
 
-cask 'visual-studio-code'
-cask 'orbstack'
 cask 'postman'
 cask 'pgadmin4'
+cask 'figma'
 
-# Virtual screen for screen sharing
-cask 'deskpad'
+# Make MacOS more usable
+cask 'loop' # Window management
+cask 'deskpad' # Virtual monitor
+cask 'jordanbaird-ice' # Menu bar icon manager
+cask 'raycast' # Launcher
+cask 'deepl' # Translator
+cask 'appcleaner' # App uninstaller
+cask 'the-unarchiver' # Unarchiver
+cask 'iterm2' # Terminal
 
-cask 'imageoptim'
-brew 'gifski'
-cask 'jordanbaird-ice'
-
-# Quicklook
+# Quicklook extensions
 cask 'qlmarkdown'
 cask 'quicklook-json'

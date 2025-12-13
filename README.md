@@ -68,15 +68,6 @@ Configures global Git settings:
 - Enables colored output
 - Configures pull to use rebase strategy
 
-#### `tools.sh`
-
-Minimal toolkit installer script:
-
-- Installs Zsh and Oh My Zsh
-- Core utilities (git, coreutils)
-- JavaScript tools (node, yarn)
-- Essential apps (iTerm2, OrbStack)
-
 #### `ttl_hack.sh`
 
 Network configuration script:

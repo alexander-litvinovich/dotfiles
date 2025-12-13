@@ -27,17 +27,16 @@ brew bundle --file ./Brewfile
 # Check for Oh My Zsh and install if we don't have it
 if test ! $(which omz); then
   /bin/sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/HEAD/tools/install.sh)"
+  chsh -s $(which zsh)
 fi
-
-# Removes .zshrc from $HOME (if it exists) and symlinks the .zshrc file from the .dotfiles
-# rm -rf $HOME/.zshrc
-# ln -s .zshrc $HOME/.zshrc
 
 # Create a projects directories
 mkdir $HOME/dev
 
-# Symlink the Mackup config file to the home directory
-# ln -s ./.mackup.cfg $HOME/.mackup.cfg
+# Removes .zshrc from $HOME (if it exists) and symlinks the .zshrc file from the .dotfiles
+rm -rf $HOME/.zshrc
+ln -s .zshrc $HOME/.zshrc
+
 
 # Set macOS preferences - we will run this last because this will reload the shell
-# source ./.mac_defaults.sh
+. ./mac_defaults.sh
