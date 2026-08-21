@@ -1,0 +1,5 @@
+#!/bin/sh
+
+while IFS= read -r _; do :; done
+repo_root=$(git rev-parse --show-toplevel) || exit 0
+"${repo_root}/link_configs.sh"

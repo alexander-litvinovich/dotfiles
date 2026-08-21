@@ -42,12 +42,14 @@ Main installation script that bootstraps your Mac setup:
 
 #### `link_configs.sh`
 
-Intelligent symlink manager for dotfiles:
+Intelligent symlink manager for dotfiles and personal agent skills:
 
 - Creates symlinks from `configs/` to your home directory
+- Creates per-skill symlinks from `skills/` to installed agents
 - Automatically backs up existing files before overwriting
 - Validates symlinks and prevents duplicates
 - Timestamped backups stored in `~/.dotfiles_backup_*`
+- Enables repository hooks that relink skills after pulls and rebases
 
 #### `mac_defaults.sh`
 
@@ -128,11 +130,31 @@ Contains dotfiles to be symlinked to home directory:
 
 Zsh shell configuration with custom settings and aliases
 
+Machine- or company-specific values belong in `configs/.zshrc.local`, which is
+ignored by Git and sourced only when present. Run `./link_configs.sh` after
+creating it to link it as `~/.zshrc.local`.
+
 #### `.tmux.conf`
 
 Tmux terminal multiplexer configuration
 
 _Note: These files are symlinked to `~/` by `link_configs.sh`_
+
+### `skills/`
+
+Contains Agent Skills shared across computers. They are created by their
+original authors; I do not associate myself with them. They are bundled here
+only as a personal selection.
+
+`link_configs.sh` links each skill individually into the global skill
+directories for installed agents, without replacing machine-specific or
+company skills.
+
+Changes to existing skills take effect immediately after `git pull` because
+the links point into this repository. Repository hooks rerun the linker after
+pulls and rebases so newly added or removed skill directories are reconciled.
+Run `./link_configs.sh` once after a fresh clone to create the initial links
+and enable those hooks.
 
 ### `vscode/`
 

@@ -56,12 +56,12 @@ cask 'figma'
 # Make MacOS more usable
 cask 'loop' # Window management
 cask 'deskpad' # Virtual monitor
-cask 'jordanbaird-ice' # Menu bar icon manager
+cask 'thaw' # Menu bar icon manager
 cask 'raycast' # Launcher
 cask 'deepl' # Translator
 cask 'appcleaner' # App uninstaller
 cask 'the-unarchiver' # Unarchiver
-cask 'iterm2' # Terminal
+cask 'cmux' # Terminal
 
 # Quicklook extensions
 cask 'qlmarkdown'

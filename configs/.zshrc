@@ -121,9 +121,6 @@ fi
 unset __conda_setup
 # <<< conda initialize <<<
 
-
-test -e /Users/alex/.iterm2_shell_integration.zsh && source /Users/alex/.iterm2_shell_integration.zsh || true
-
 # krew
 export PATH="${KREW_ROOT:-$HOME/.krew}/bin:$PATH"
 export GPG_TTY=$(tty)
@@ -141,12 +138,6 @@ export NVM_DIR="$HOME/.nvm"
 [ -s "/opt/homebrew/opt/nvm/nvm.sh" ] && \. "/opt/homebrew/opt/nvm/nvm.sh"  # This loads nvm
 [ -s "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm" ] && \. "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm"  # This loads nvm bash_completion
 
-export CURL_CA_BUNDLE="/Users/alex/.curl-certs/amd-ca-bundle.crt"
-
-# AMD Node.js Certificate Configuration
-export NODE_EXTRA_CA_CERTS="/Users/alex/.nodejs-certs/amd-ca-bundle.crt"
-# End AMD Node.js Certificate Configuration
-
 # pnpm
 export PNPM_HOME="/Users/alex/Library/pnpm"
 case ":$PATH:" in
@@ -160,3 +151,11 @@ esac
 # Task Master aliases added on 10/15/2025
 alias tm='task-master'
 alias taskmaster='task-master'
+
+# Fix cmux setting the wrong GHOSTTY_BIN_DIR (breaks `ssh` via ghostty-integration.zsh's ssh-env/ssh-terminfo wrapper)
+if [ "$GHOSTTY_BIN_DIR" = "/Applications/cmux.app/Contents/MacOS" ]; then
+  export GHOSTTY_BIN_DIR="/Applications/cmux.app/Contents/Resources/bin"
+fi
+
+# Computer/company-specific configuration (not tracked by git)
+[ -r "$HOME/.zshrc.local" ] && source "$HOME/.zshrc.local"

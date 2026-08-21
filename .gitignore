@@ -24,3 +24,6 @@ Icon
 Network Trash Folder
 Temporary Items
 .apdisk
+
+# Computer/company-specific shell configuration
+/configs/.zshrc.local
