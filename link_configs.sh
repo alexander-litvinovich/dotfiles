@@ -14,7 +14,6 @@ NC='\033[0m' # No Color
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_DIR="${SCRIPT_DIR}/configs"
-SKILL_DIR="${SCRIPT_DIR}/skills"
 BACKUP_DIR="${HOME}/.dotfiles_backup_$(date +%Y%m%d_%H%M%S)"
 
 echo -e "${GREEN}=== Dotfiles Symlink Setup ===${NC}"
@@ -91,37 +90,6 @@ for file in "${CONFIG_DIR}"/*; do
     # Create symlink
     create_symlink "${file}" "${target}"
 done
-
-if [ -d "${SKILL_DIR}" ]; then
-    echo ""
-    echo "Linking personal agent skills..."
-
-    agent_skill_dirs=()
-    [ -d "${HOME}/.cursor" ] && agent_skill_dirs+=("${HOME}/.cursor/skills")
-    [ -d "${HOME}/.claude" ] && agent_skill_dirs+=("${HOME}/.claude/skills")
-    [ -d "${HOME}/.agents" ] && agent_skill_dirs+=("${HOME}/.agents/skills")
-    [ -d "${HOME}/.codex" ] && agent_skill_dirs+=("${HOME}/.codex/skills")
-
-    for target_dir in "${agent_skill_dirs[@]}"; do
-        mkdir -p "${target_dir}"
-
-        for target in "${target_dir}"/*; do
-            [ -L "${target}" ] || continue
-            source=$(readlink "${target}")
-            if [[ "${source}" == "${SKILL_DIR}/"* ]] && [ ! -f "${source}/SKILL.md" ]; then
-                echo -e "${YELLOW}  Removing obsolete link: ${target}${NC}"
-                rm "${target}"
-            fi
-        done
-
-        for skill in "${SKILL_DIR}"/*; do
-            [ -f "${skill}/SKILL.md" ] || continue
-            name=$(basename "${skill}")
-            backup_name="$(basename "$(dirname "${target_dir}")")-skills-${name}"
-            create_symlink "${skill}" "${target_dir}/${name}" "${backup_name}"
-        done
-    done
-fi
 
 git -C "${SCRIPT_DIR}" config core.hooksPath .githooks
 

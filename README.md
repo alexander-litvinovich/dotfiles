@@ -16,8 +16,11 @@ cd ~/dev/dotfiles
 # Run the main installation script
 ./install.sh
 
-# Link configuration files
+# Refresh configuration files
 ./link_configs.sh
+
+# Refresh global agent instructions and skills
+./link_agents.sh
 
 # Apply macOS system preferences
 ./mac_defaults.sh
@@ -39,17 +42,28 @@ Main installation script that bootstraps your Mac setup:
 - Installs all packages and applications from `Brewfile`
 - Installs Oh My Zsh shell framework
 - Creates `~/dev` directory for projects
+- Links dotfiles, global agent instructions, and personal agent skills
 
 #### `link_configs.sh`
 
-Intelligent symlink manager for dotfiles and personal agent skills:
+Symlink manager for dotfiles:
 
 - Creates symlinks from `configs/` to your home directory
-- Creates per-skill symlinks from `skills/` to installed agents
 - Automatically backs up existing files before overwriting
 - Validates symlinks and prevents duplicates
 - Timestamped backups stored in `~/.dotfiles_backup_*`
-- Enables repository hooks that relink skills after pulls and rebases
+- Enables repository hooks that refresh links after pulls and rebases
+
+#### `link_agents.sh`
+
+Symlink manager for global agent instructions and personal Agent Skills:
+
+- Links `agents/AGENTS.md` to Codex and Claude Code
+- Maintains the dotfiles import block in `~/.claude/CLAUDE.md`
+- Preserves the machine-local `@RTK.md` import when `~/.claude/RTK.md` exists
+- Creates per-skill symlinks from `skills/` to installed agents
+- Removes links for skills deleted from this repository
+- Backs up files before replacing them
 
 #### `mac_defaults.sh`
 
@@ -140,21 +154,33 @@ Tmux terminal multiplexer configuration
 
 _Note: These files are symlinked to `~/` by `link_configs.sh`_
 
+### `agents/`
+
+Contains the canonical global [`AGENTS.md`](agents/AGENTS.md). `link_agents.sh`
+links it to `~/.codex/AGENTS.md` and `~/.claude/AGENTS.md`. Claude Code loads
+the same file through an `@AGENTS.md` import managed in
+`~/.claude/CLAUDE.md`.
+
+Cursor User Rules are account settings, not files. To apply the same
+instructions in Cursor, copy the relevant text from `agents/AGENTS.md` to
+**Cursor Settings → Rules → User Rules**. Prompt instructions guide model
+behavior but do not guarantee output formatting.
+
 ### `skills/`
 
 Contains Agent Skills shared across computers. They are created by their
 original authors; I do not associate myself with them. They are bundled here
 only as a personal selection.
 
-`link_configs.sh` links each skill individually into the global skill
+`link_agents.sh` links each skill individually into the global skill
 directories for installed agents, without replacing machine-specific or
 company skills.
 
 Changes to existing skills take effect immediately after `git pull` because
 the links point into this repository. Repository hooks rerun the linker after
 pulls and rebases so newly added or removed skill directories are reconciled.
-Run `./link_configs.sh` once after a fresh clone to create the initial links
-and enable those hooks.
+Run `./link_agents.sh` once after a fresh clone to create the initial links
+and `./link_configs.sh` to enable the repository hooks.
 
 ### `vscode/`
 
@@ -187,6 +213,9 @@ Script to manage Continue extension configuration:
 
 # Link all config files
 ./link_configs.sh
+
+# Link global agent instructions and skills
+./link_agents.sh
 
 # Apply system preferences (will restart Dock/Finder)
 ./mac_defaults.sh
@@ -245,6 +274,12 @@ cask 'application-name'    # for GUI applications
 
 1. Place dotfile in `configs/` directory
 2. Run `./link_configs.sh` to create symlink
+
+### Adding global agent instructions
+
+1. Edit `agents/AGENTS.md`
+2. Run `./link_agents.sh` to create or refresh agent links
+3. Copy any always-on instructions to Cursor User Rules
 
 ### Modifying System Preferences
 

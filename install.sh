@@ -33,9 +33,9 @@ fi
 # Create a projects directories
 mkdir $HOME/dev
 
-# Removes .zshrc from $HOME (if it exists) and symlinks the .zshrc file from the .dotfiles
-rm -rf $HOME/.zshrc
-ln -s .zshrc $HOME/.zshrc
+# Link dotfiles, global agent instructions, and personal agent skills
+./link_configs.sh
+./link_agents.sh
 
 
 # Set macOS preferences - we will run this last because this will reload the shell
