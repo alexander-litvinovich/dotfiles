@@ -16,53 +16,77 @@
 #
 # ============================================================================
 
-# Shell
-brew 'zsh' # Shell
-brew 'git' # Version control system
+# Shell and CLI
 brew 'coreutils' # Core utilities
+brew 'git' # Version control system
+brew 'rtk' # Shell
 brew 'tmux' # Terminal multiplexer
+brew 'zsh' # Shell
 
-# Image Processing
-cask 'imageoptim'
+# Image processing
+brew 'gifsicle'
+brew 'gifski'
+brew 'imagemagick'
 brew 'jpegoptim'
 brew 'optipng'
 brew 'pngquant'
-brew 'imagemagick'
-brew 'gifsicle'
 brew 'svgo'
+cask 'imageoptim'
 
 # OCR
 brew 'tesseract'
 brew 'tesseract-lang'
 
 # Development
+# brew 'gemini-cli'
 brew 'node'
+brew 'pnpm'
 brew 'yarn'
-cask 'visual-studio-code'
+# cask 'android-studio'
+cask 'claude-code'
+cask 'codex'
 cask 'orbstack'
+cask 'visual-studio-code'
+cask 'windows-app'
 
-# Apps
-cask 'boop'
-brew 'gifski'
-
-# Browsers
-cask 'google-chrome'
-cask 'chromium'
-
-cask 'postman'
+# API and database tools
 cask 'pgadmin4'
+cask 'postman'
+
+# Design and 3D
+cask 'autodesk-fusion'
 cask 'figma'
 
-# Make MacOS more usable
-cask 'loop' # Window management
-cask 'deskpad' # Virtual monitor
-cask 'thaw' # Menu bar icon manager
-cask 'raycast' # Launcher
-cask 'deepl' # Translator
+# Productivity and utilities
+brew 'dockutil'
+brew 'tailscale'
 cask 'appcleaner' # App uninstaller
-cask 'the-unarchiver' # Unarchiver
+cask 'bitwarden'
 cask 'cmux' # Terminal
+cask 'deepl' # Translator
+cask 'deskpad' # Virtual monitor
+cask 'hyperkey'
+cask 'iterm2' # Terminal
+cask 'localsend'
+cask 'loop' # Window management
+cask 'outline-manager'
+cask 'raycast' # Launcher
+cask 'tailscale-app'
+cask 'thaw' # Menu bar icon manager
+cask 'the-unarchiver' # Unarchiver
 
-# Quicklook extensions
+# Browsers
+cask 'chromium'
+cask 'google-chrome'
+cask 'zen'
+
+# Communication
+cask 'telegram-desktop'
+cask 'whatsapp'
+
+# Miscellaneous apps
+cask 'boop'
+cask 'chatgpt'
+
+# Quick Look extensions
 cask 'qlmarkdown'
-cask 'quicklook-json'
