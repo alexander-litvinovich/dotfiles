@@ -22,6 +22,7 @@ brew 'git' # Version control system
 brew 'rtk' # Shell
 brew 'tmux' # Terminal multiplexer
 brew 'zsh' # Shell
+brew 'make' 
 
 # Image processing
 brew 'gifsicle'
@@ -74,6 +75,7 @@ cask 'raycast' # Launcher
 cask 'tailscale-app'
 cask 'thaw' # Menu bar icon manager
 cask 'the-unarchiver' # Unarchiver
+cask 'openlogi'
 
 # Browsers
 cask 'chromium'
