@@ -40,6 +40,7 @@ brew 'tesseract-lang'
 
 # Development
 # brew 'gemini-cli'
+brew 'go'
 brew 'node'
 brew 'pnpm'
 brew 'yarn'
