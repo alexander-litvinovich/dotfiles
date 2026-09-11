@@ -42,7 +42,15 @@ When you need an answer from the user (not a one-way ping), block on:
 telegram-notify --prompt "your question here"
 ```
 
-This sends the question, waits up to 5 minutes for a plain-text reply, reacts to it with 👀, and prints the reply text on stdout for you to use. If the user reacts to a "still there?" check-in near the deadline, the wait extends by 5 more minutes. On timeout the command exits non-zero, the chat gets a timeout notice, and stdout is empty — treat that like any other missing answer (tell the user in chat, don't retry in a loop). Full details: [cmd/telegram-notify/README.md](../../cmd/telegram-notify/README.md).
+This sends the question, waits up to 5 minutes for a plain-text reply or an inline button tap, and prints the answer on stdout (button label or reply text). A button tap edits the question message to append `Answer: <label>` and reacts with 👍, so the choice stays visible; a text reply gets a 👀 reaction and the buttons are removed instead. If the user reacts to a "still there?" check-in near the deadline, the wait extends by 5 more minutes. On timeout the command exits non-zero, the chat gets a timeout notice, buttons are removed, and stdout is empty — treat that like any other missing answer (tell the user in chat, don't retry in a loop). Full details: [cmd/telegram-notify/README.md](../../cmd/telegram-notify/README.md).
+
+For yes/no or fixed choices, add `--button` (repeatable):
+
+```bash
+answer=$(telegram-notify --prompt "Proceed with deploy?" --button Yes --button No)
+```
+
+Use plain `--prompt` without `--button` when you want a free-form answer only.
 
 Use this only when you truly need their input; keep using a plain `telegram-notify` message for completion pings.
 
@@ -82,5 +90,5 @@ telegram-notify "tests green on main"
 **Need a decision before continuing (user is away from chat):**
 
 ```bash
-answer=$(telegram-notify --prompt "Deploy to prod now, or wait for review?")
+answer=$(telegram-notify --prompt "Deploy to prod now, or wait for review?" --button Deploy --button Wait)
 ```
