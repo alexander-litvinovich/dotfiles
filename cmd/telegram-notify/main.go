@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
+	"golang.org/x/term"
 )
 
 const (
@@ -41,12 +43,81 @@ const (
 )
 
 var (
-	errNoSavedChat   = errors.New("no saved chat ID")
 	errPromptTimeout = errors.New("timed out waiting for a reply")
 )
 
 type config struct {
-	ChatID int64 `json:"chat_id"`
+	BotToken string      `json:"bot_token,omitempty"`
+	ChatID   *chatTarget `json:"chat_id,omitempty"`
+}
+
+type chatTarget struct {
+	value any
+}
+
+func (c chatTarget) MarshalJSON() ([]byte, error) {
+	return json.Marshal(c.value)
+}
+
+func (c *chatTarget) UnmarshalJSON(data []byte) error {
+	var id int64
+	if err := json.Unmarshal(data, &id); err == nil {
+		if id == 0 {
+			return errors.New("chat ID must not be zero")
+		}
+		c.value = id
+		return nil
+	}
+
+	var username string
+	if err := json.Unmarshal(data, &username); err != nil {
+		return errors.New("chat ID must be an integer or an @channel username")
+	}
+	target, err := parseChatTarget(username, "chat ID")
+	if err != nil {
+		return err
+	}
+	c.value = target.value
+	return nil
+}
+
+type stringOption struct {
+	value string
+	set   bool
+}
+
+func (o *stringOption) Set(value string) error {
+	o.value = value
+	o.set = true
+	return nil
+}
+
+func (o *stringOption) String() string { return o.value }
+
+type stringList []string
+
+func (s *stringList) Set(value string) error {
+	*s = append(*s, value)
+	return nil
+}
+
+func (s *stringList) String() string { return strings.Join(*s, ",") }
+
+type cliOptions struct {
+	text      stringOption
+	token     stringOption
+	chatID    stringOption
+	setToken  stringOption
+	setChatID stringOption
+	buttons   stringList
+	prompt    bool
+	learn     bool
+	help      bool
+}
+
+type settings struct {
+	token  string
+	chatID *chatTarget
 }
 
 type promptAnswer struct {
@@ -58,8 +129,11 @@ type promptAnswer struct {
 type application struct {
 	getenv         func(string) string
 	stdout         io.Writer
+	stderr         io.Writer
 	now            func() time.Time
 	configPath     func() (string, error)
+	readToken      func(io.Writer) (string, error)
+	validateToken  func(context.Context, string) error
 	learn          func(context.Context, string, time.Time) (int64, error)
 	send           func(context.Context, string, any, string) error
 	sendTracked    func(context.Context, string, any, string) (int, error)
@@ -69,17 +143,22 @@ type application struct {
 	removeKeyboard func(context.Context, string, int64, int) error
 	appendAnswer   func(context.Context, string, int64, int, string) error
 	react          func(context.Context, string, int64, int, string) error
+	redactions     *[]string
 }
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	redactions := []string{os.Getenv(botTokenEnv)}
 	app := application{
 		getenv:         os.Getenv,
 		stdout:         os.Stdout,
+		stderr:         os.Stderr,
 		now:            time.Now,
 		configPath:     defaultConfigPath,
+		readToken:      readTokenFromTerminal,
+		validateToken:  validateBotToken,
 		learn:          learnChat,
 		send:           sendMessage,
 		sendTracked:    sendMessageTracked,
@@ -89,99 +168,313 @@ func main() {
 		removeKeyboard: removeInlineKeyboard,
 		appendAnswer:   appendAnswerText,
 		react:          react,
+		redactions:     &redactions,
 	}
 
 	if err := app.run(ctx, os.Args[1:]); err != nil {
-		fmt.Fprintf(os.Stderr, "telegram-notify: %s\n", redact(err.Error(), os.Getenv(botTokenEnv)))
+		fmt.Fprintf(os.Stderr, "telegram-notify: %s\n", redactAll(err.Error(), redactions))
 		os.Exit(1)
 	}
 }
 
 func (app application) run(ctx context.Context, args []string) error {
-	token := strings.TrimSpace(app.getenv(botTokenEnv))
-	if token == "" {
-		return fmt.Errorf("%s is not set", botTokenEnv)
-	}
-
-	if len(args) == 1 && args[0] == "--learn" {
-		return app.runLearn(ctx, token)
-	}
-	if len(args) > 0 && args[0] == "--learn" {
-		return errors.New("--learn does not accept arguments")
-	}
-
-	if len(args) >= 1 && args[0] == "--prompt" {
-		question, buttons, err := parsePromptArgs(args[1:])
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(question) == "" {
-			return errors.New("question is required; usage: telegram-notify --prompt <question> [--button <label> ...]")
-		}
-		return app.runPrompt(ctx, token, question, buttons)
-	}
-
-	message := strings.Join(args, " ")
-	if strings.TrimSpace(message) == "" {
-		return errors.New("message is required; usage: telegram-notify <message>")
-	}
-
-	chatID, err := app.resolveChatID()
+	opts, err := parseCLI(args)
 	if err != nil {
 		return err
 	}
-
-	if err := app.send(ctx, token, chatID, message); err != nil {
-		return fmt.Errorf("send message: %w", err)
-	}
-	return nil
-}
-
-func parsePromptArgs(args []string) (question string, buttons []string, err error) {
-	var questionParts []string
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--button" {
-			if i+1 >= len(args) {
-				return "", nil, errors.New("--button requires a label")
-			}
-			i++
-			buttons = append(buttons, args[i])
-			continue
-		}
-		questionParts = append(questionParts, args[i])
-	}
-	return strings.Join(questionParts, " "), buttons, nil
-}
-
-func (app application) runLearn(ctx context.Context, token string) error {
-	fmt.Fprintln(app.stdout, "Waiting for /start in a private chat...")
-
-	chatID, err := app.learn(ctx, token, app.now())
-	if err != nil {
-		return fmt.Errorf("learn chat ID: %w", err)
+	app.rememberSecret(opts.token.value)
+	app.rememberSecret(opts.setToken.value)
+	if opts.help {
+		app.printHelp()
+		return nil
 	}
 
 	path, err := app.configPath()
 	if err != nil {
 		return err
 	}
-	if err := saveConfig(path, config{ChatID: chatID}); err != nil {
-		return fmt.Errorf("save chat ID: %w", err)
+	cfg, err := loadConfig(path)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	app.rememberSecret(cfg.BotToken)
+
+	if opts.setToken.set || opts.setChatID.set {
+		return app.runSet(path, cfg, opts)
 	}
 
-	if err := app.send(ctx, token, chatID, "Telegram notifier connected."); err != nil {
-		return fmt.Errorf("chat ID was saved, but confirmation failed: %w", err)
-	}
-
-	fmt.Fprintf(app.stdout, "Connected to chat %d.\n", chatID)
-	return nil
-}
-
-func (app application) runPrompt(ctx context.Context, token, question string, buttons []string) error {
-	chatID, err := app.resolveChatID()
+	resolved, err := app.resolveSettings(cfg, opts)
 	if err != nil {
 		return err
 	}
+
+	if opts.learn {
+		if resolved.token == "" {
+			return errors.New("bot token is not configured; run telegram-notify without arguments or use --token")
+		}
+		return app.runLearn(ctx, path, cfg, resolved.token)
+	}
+
+	if opts.text.set {
+		if resolved.token == "" || resolved.chatID == nil {
+			return errors.New("telegram-notify is not configured; run it without arguments to start setup")
+		}
+		if opts.prompt {
+			return app.runPrompt(ctx, resolved.token, resolved.chatID.value, opts.text.value, opts.buttons)
+		}
+		if err := app.send(ctx, resolved.token, resolved.chatID.value, opts.text.value); err != nil {
+			return fmt.Errorf("send message: %w", err)
+		}
+		return nil
+	}
+
+	if resolved.token == "" || resolved.chatID == nil {
+		return app.runSetup(ctx, path, cfg, resolved)
+	}
+	app.printHelp()
+	return nil
+}
+
+func parseCLI(args []string) (cliOptions, error) {
+	var opts cliOptions
+	flags := flag.NewFlagSet("telegram-notify", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.Var(&opts.text, "text", "message or question text")
+	flags.BoolVar(&opts.prompt, "prompt", false, "wait for a Telegram reply")
+	flags.Var(&opts.buttons, "button", "prompt button label; repeatable")
+	flags.Var(&opts.token, "token", "temporary bot token override")
+	flags.Var(&opts.chatID, "chat-id", "temporary chat ID override")
+	flags.Var(&opts.setToken, "set-token", "save a bot token without API validation")
+	flags.Var(&opts.setChatID, "set-chat-id", "save a chat ID without contacting Telegram")
+	flags.BoolVar(&opts.learn, "learn", false, "learn and save a private chat ID from /start")
+	flags.BoolVar(&opts.help, "help", false, "show help")
+	flags.BoolVar(&opts.help, "h", false, "show help")
+
+	if err := flags.Parse(args); err != nil {
+		return cliOptions{}, fmt.Errorf("%w\n\n%s", err, usageText)
+	}
+	if opts.help {
+		return opts, nil
+	}
+	if flags.NArg() != 0 {
+		return cliOptions{}, fmt.Errorf("unexpected positional arguments: %s\n\n%s", strings.Join(flags.Args(), " "), usageText)
+	}
+
+	setMode := opts.setToken.set || opts.setChatID.set
+	if setMode {
+		if opts.text.set || opts.prompt || len(opts.buttons) > 0 || opts.learn || opts.token.set || opts.chatID.set {
+			return cliOptions{}, errors.New("--set-token and --set-chat-id cannot be combined with action or override flags")
+		}
+		if opts.setToken.set && strings.TrimSpace(opts.setToken.value) == "" {
+			return cliOptions{}, errors.New("--set-token requires a non-empty value")
+		}
+		if opts.setChatID.set {
+			if _, err := parseChatTarget(opts.setChatID.value, "--set-chat-id"); err != nil {
+				return cliOptions{}, err
+			}
+		}
+		return opts, nil
+	}
+
+	if opts.learn {
+		if opts.text.set || opts.prompt || len(opts.buttons) > 0 {
+			return cliOptions{}, errors.New("--learn cannot be combined with --text, --prompt, or --button")
+		}
+		if opts.chatID.set {
+			return cliOptions{}, errors.New("--learn cannot be combined with --chat-id")
+		}
+	}
+	if opts.text.set && strings.TrimSpace(opts.text.value) == "" {
+		return cliOptions{}, errors.New("--text requires a non-empty value")
+	}
+	if opts.prompt && !opts.text.set {
+		return cliOptions{}, errors.New("--prompt requires --text")
+	}
+	if len(opts.buttons) > 0 && !opts.prompt {
+		return cliOptions{}, errors.New("--button requires --prompt")
+	}
+	for _, button := range opts.buttons {
+		if strings.TrimSpace(button) == "" {
+			return cliOptions{}, errors.New("--button requires a non-empty label")
+		}
+	}
+	return opts, nil
+}
+
+const usageText = `Usage:
+  telegram-notify --text "message"
+  telegram-notify --text "question" --prompt [--button LABEL ...]
+  telegram-notify --learn [--token TOKEN]
+  telegram-notify --set-token TOKEN [--set-chat-id ID]
+  telegram-notify --set-chat-id ID
+
+Options:
+  --text TEXT        Message or question text.
+  --prompt           Wait for a text reply or button tap.
+  --button LABEL     Add a prompt button. Repeat for more buttons.
+  --token TOKEN      Override the bot token for this invocation.
+  --chat-id ID       Override the chat for this invocation.
+  --set-token TOKEN  Save a bot token without API validation.
+  --set-chat-id ID   Save a numeric chat ID or @username.
+  --learn            Replace the saved chat ID after receiving /start.
+  --help, -h         Show this help.`
+
+func (app application) printHelp() {
+	fmt.Fprintln(app.stdout, usageText)
+}
+
+func (app application) resolveSettings(cfg config, opts cliOptions) (settings, error) {
+	token := strings.TrimSpace(app.getenv(botTokenEnv))
+	if strings.TrimSpace(cfg.BotToken) != "" {
+		token = strings.TrimSpace(cfg.BotToken)
+	}
+	if opts.token.set {
+		token = strings.TrimSpace(opts.token.value)
+		if token == "" {
+			return settings{}, errors.New("--token requires a non-empty value")
+		}
+	}
+
+	var chatID *chatTarget
+	if opts.chatID.set {
+		parsed, err := parseChatTarget(opts.chatID.value, "--chat-id")
+		if err != nil {
+			return settings{}, err
+		}
+		chatID = parsed
+	} else if cfg.ChatID != nil {
+		chatID = cfg.ChatID
+	} else if raw := strings.TrimSpace(app.getenv(chatIDEnv)); raw != "" {
+		parsed, err := parseChatTarget(raw, chatIDEnv)
+		if err != nil {
+			return settings{}, err
+		}
+		chatID = parsed
+	}
+	return settings{token: token, chatID: chatID}, nil
+}
+
+func parseChatTarget(value, source string) (*chatTarget, error) {
+	value = strings.TrimSpace(value)
+	if id, err := strconv.ParseInt(value, 10, 64); err == nil {
+		if id == 0 {
+			return nil, fmt.Errorf("%s must not be zero", source)
+		}
+		return &chatTarget{value: id}, nil
+	}
+	if strings.HasPrefix(value, "@") && len(value) > 1 && !strings.ContainsAny(value, " \t\r\n") {
+		return &chatTarget{value: value}, nil
+	}
+	return nil, fmt.Errorf("%s must be an integer or an @channel username", source)
+}
+
+func (app application) runSet(path string, cfg config, opts cliOptions) error {
+	if opts.setToken.set {
+		cfg.BotToken = strings.TrimSpace(opts.setToken.value)
+	}
+	if opts.setChatID.set {
+		chatID, err := parseChatTarget(opts.setChatID.value, "--set-chat-id")
+		if err != nil {
+			return err
+		}
+		cfg.ChatID = chatID
+	}
+	if err := saveConfig(path, cfg); err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+	if opts.setToken.set && opts.setChatID.set {
+		fmt.Fprintln(app.stdout, "Bot token and chat ID saved.")
+	} else if opts.setToken.set {
+		fmt.Fprintln(app.stdout, "Bot token saved.")
+	} else {
+		fmt.Fprintln(app.stdout, "Chat ID saved.")
+	}
+	return nil
+}
+
+func (app application) runSetup(ctx context.Context, path string, cfg config, resolved settings) error {
+	token := resolved.token
+	tokenValidated := false
+	if token == "" {
+		for {
+			entered, err := app.readToken(app.stdout)
+			if err != nil {
+				return err
+			}
+			token = strings.TrimSpace(entered)
+			app.rememberSecret(token)
+			if token == "" {
+				fmt.Fprintln(app.stdout, "Bot token cannot be empty.")
+				continue
+			}
+			if err := app.validateToken(ctx, token); err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				if !isInvalidBotToken(err) {
+					return fmt.Errorf("validate bot token: %w", err)
+				}
+				fmt.Fprintf(app.stdout, "Bot token is invalid: %s\n", app.redact(err.Error()))
+				continue
+			}
+			tokenValidated = true
+			cfg.BotToken = token
+			if err := saveConfig(path, cfg); err != nil {
+				return fmt.Errorf("save bot token: %w", err)
+			}
+			break
+		}
+	}
+
+	chatID := resolved.chatID
+	if chatID == nil {
+		if !tokenValidated {
+			if err := app.validateToken(ctx, token); err != nil {
+				return fmt.Errorf("validate bot token: %w", err)
+			}
+		}
+		fmt.Fprintln(app.stdout, "Send /start to the bot in a private chat. Waiting...")
+		learnedID, err := app.learn(ctx, token, app.now())
+		if err != nil {
+			return fmt.Errorf("learn chat ID: %w", err)
+		}
+		chatID = &chatTarget{value: learnedID}
+		cfg.ChatID = chatID
+		if err := saveConfig(path, cfg); err != nil {
+			return fmt.Errorf("save chat ID: %w", err)
+		}
+	}
+
+	return app.confirmConnection(ctx, token, chatID)
+}
+
+func (app application) runLearn(ctx context.Context, path string, cfg config, token string) error {
+	if err := app.validateToken(ctx, token); err != nil {
+		return fmt.Errorf("validate bot token: %w", err)
+	}
+	fmt.Fprintln(app.stdout, "Send /start to the bot in a private chat. Waiting...")
+
+	chatID, err := app.learn(ctx, token, app.now())
+	if err != nil {
+		return fmt.Errorf("learn chat ID: %w", err)
+	}
+
+	cfg.ChatID = &chatTarget{value: chatID}
+	if err := saveConfig(path, cfg); err != nil {
+		return fmt.Errorf("save chat ID: %w", err)
+	}
+	return app.confirmConnection(ctx, token, cfg.ChatID)
+}
+
+func (app application) confirmConnection(ctx context.Context, token string, chatID *chatTarget) error {
+	if err := app.send(ctx, token, chatID.value, "Telegram notifier connected."); err != nil {
+		return fmt.Errorf("chat ID was saved, but confirmation failed: %w", err)
+	}
+	fmt.Fprintf(app.stdout, "Connected to chat %v.\n", chatID.value)
+	return nil
+}
+
+func (app application) runPrompt(ctx context.Context, token string, chatID any, question string, buttons []string) error {
 	numericChatID, ok := chatID.(int64)
 	if !ok {
 		return errors.New("--prompt requires a private/group chat, not a channel username")
@@ -197,12 +490,12 @@ func (app application) runPrompt(ctx context.Context, token, question string, bu
 	if err != nil {
 		if len(buttons) > 0 {
 			if rmErr := app.removeKeyboard(ctx, token, numericChatID, msgID); rmErr != nil {
-				fmt.Fprintf(os.Stderr, "telegram-notify: failed to remove keyboard: %s\n", rmErr)
+				app.warn("failed to remove keyboard", rmErr)
 			}
 		}
 		if errors.Is(err, errPromptTimeout) {
 			if sendErr := app.send(ctx, token, chatID, timeoutText); sendErr != nil {
-				fmt.Fprintf(os.Stderr, "telegram-notify: failed to send timeout notice: %s\n", sendErr)
+				app.warn("failed to send timeout notice", sendErr)
 			}
 		}
 		return err
@@ -210,56 +503,28 @@ func (app application) runPrompt(ctx context.Context, token, question string, bu
 
 	if ans.callbackID != "" {
 		if err := app.answerCallback(ctx, token, ans.callbackID); err != nil {
-			fmt.Fprintf(os.Stderr, "telegram-notify: answer callback failed: %s\n", err)
+			app.warn("answer callback failed", err)
 		}
 		answeredText := question + "\n\nAnswer: " + ans.text
 		if err := app.appendAnswer(ctx, token, numericChatID, msgID, answeredText); err != nil {
-			fmt.Fprintf(os.Stderr, "telegram-notify: failed to record answer on message: %s\n", err)
+			app.warn("failed to record answer on message", err)
 		}
 		if err := app.react(ctx, token, numericChatID, msgID, checkmarkEmoji); err != nil {
-			fmt.Fprintf(os.Stderr, "telegram-notify: react with checkmark failed: %s\n", err)
+			app.warn("react with checkmark failed", err)
 		}
 	} else {
 		if len(buttons) > 0 {
 			if err := app.removeKeyboard(ctx, token, numericChatID, msgID); err != nil {
-				fmt.Fprintf(os.Stderr, "telegram-notify: failed to remove keyboard: %s\n", err)
+				app.warn("failed to remove keyboard", err)
 			}
 		}
 		if err := app.react(ctx, token, numericChatID, ans.replyMsgID, eyesEmoji); err != nil {
-			fmt.Fprintf(os.Stderr, "telegram-notify: react with eyes failed: %s\n", err)
+			app.warn("react with eyes failed", err)
 		}
 	}
 
 	fmt.Fprintln(app.stdout, ans.text)
 	return nil
-}
-
-func (app application) resolveChatID() (any, error) {
-	if value := strings.TrimSpace(app.getenv(chatIDEnv)); value != "" {
-		if id, err := strconv.ParseInt(value, 10, 64); err == nil {
-			if id == 0 {
-				return nil, fmt.Errorf("%s must not be zero", chatIDEnv)
-			}
-			return id, nil
-		}
-		if strings.HasPrefix(value, "@") {
-			return value, nil
-		}
-		return nil, fmt.Errorf("%s must be an integer or an @channel username", chatIDEnv)
-	}
-
-	path, err := app.configPath()
-	if err != nil {
-		return nil, err
-	}
-	cfg, err := loadConfig(path)
-	if errors.Is(err, errNoSavedChat) {
-		return nil, errors.New("chat ID is not configured; set TG_CHAT_ID or run telegram-notify --learn")
-	}
-	if err != nil {
-		return nil, fmt.Errorf("load chat ID: %w", err)
-	}
-	return cfg.ChatID, nil
 }
 
 func defaultConfigPath() (string, error) {
@@ -277,7 +542,7 @@ func defaultConfigPath() (string, error) {
 func loadConfig(path string) (config, error) {
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return config{}, errNoSavedChat
+		return config{}, nil
 	}
 	if err != nil {
 		return config{}, err
@@ -288,15 +553,14 @@ func loadConfig(path string) (config, error) {
 	if err := json.NewDecoder(file).Decode(&cfg); err != nil {
 		return config{}, err
 	}
-	if cfg.ChatID == 0 {
-		return config{}, errors.New("saved chat ID is empty")
-	}
+	cfg.BotToken = strings.TrimSpace(cfg.BotToken)
 	return cfg, nil
 }
 
 func saveConfig(path string, cfg config) error {
-	if cfg.ChatID == 0 {
-		return errors.New("chat ID is empty")
+	cfg.BotToken = strings.TrimSpace(cfg.BotToken)
+	if cfg.BotToken == "" && cfg.ChatID == nil {
+		return errors.New("config is empty")
 	}
 
 	dir := filepath.Dir(path)
@@ -323,6 +587,64 @@ func saveConfig(path string, cfg config) error {
 		return err
 	}
 	return os.Rename(tmpName, path)
+}
+
+func readTokenFromTerminal(out io.Writer) (string, error) {
+	return readTokenFromFD(int(os.Stdin.Fd()), out)
+}
+
+func readTokenFromFD(fd int, out io.Writer) (string, error) {
+	if !term.IsTerminal(fd) {
+		return "", errors.New("cannot read a bot token from non-terminal stdin; use --token, --set-token, or TG_BOT_TOKEN")
+	}
+	fmt.Fprint(out, "Bot token: ")
+	value, err := term.ReadPassword(fd)
+	fmt.Fprintln(out)
+	if err != nil {
+		return "", fmt.Errorf("read bot token: %w", err)
+	}
+	return string(value), nil
+}
+
+func validateBotToken(ctx context.Context, token string) error {
+	client, err := bot.New(
+		token,
+		bot.WithSkipGetMe(),
+		bot.WithHTTPClient(requestTimeout, &http.Client{Timeout: requestTimeout}),
+	)
+	if err != nil {
+		return err
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+	_, err = client.GetMe(requestCtx)
+	return err
+}
+
+func isInvalidBotToken(err error) bool {
+	return errors.Is(err, bot.ErrorUnauthorized) || errors.Is(err, bot.ErrorNotFound)
+}
+
+func (app application) rememberSecret(secret string) {
+	secret = strings.TrimSpace(secret)
+	if secret != "" && app.redactions != nil {
+		*app.redactions = append(*app.redactions, secret)
+	}
+}
+
+func (app application) redact(message string) string {
+	if app.redactions == nil {
+		return message
+	}
+	return redactAll(message, *app.redactions)
+}
+
+func (app application) warn(message string, err error) {
+	stderr := app.stderr
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	fmt.Fprintf(stderr, "telegram-notify: %s: %s\n", message, app.redact(err.Error()))
 }
 
 func inlineKeyboard(buttons []string) *models.InlineKeyboardMarkup {
@@ -707,8 +1029,16 @@ func isFreshPrivateStart(update *models.Update, startedAt time.Time) bool {
 }
 
 func redact(message, secret string) string {
+	secret = strings.TrimSpace(secret)
 	if secret == "" {
 		return message
 	}
 	return strings.ReplaceAll(message, secret, "[REDACTED]")
+}
+
+func redactAll(message string, secrets []string) string {
+	for _, secret := range secrets {
+		message = redact(message, secret)
+	}
+	return message
 }

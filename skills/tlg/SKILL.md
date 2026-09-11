@@ -2,7 +2,8 @@
 name: tlg
 description: >
   Sends one brief Telegram push notification via telegram-notify when a task
-  finishes, or blocks on a Telegram question via telegram-notify --prompt when
+  finishes, or blocks on a Telegram question by adding --prompt to a
+  telegram-notify command when
   the agent needs the user's input. Use when the user invokes /tlg or $tlg,
   asks to notify them in Telegram, send them a message, ping in tlg, or says
   "скинуть в телегу"; when a long multi-step process completes and they
@@ -29,28 +30,29 @@ Ping the user on Telegram once, or ask them a question and wait for the reply. N
 ## How to send
 
 ```bash
-telegram-notify "your message here"
+telegram-notify --text "your message here"
 ```
 
-Requires `TG_BOT_TOKEN` and a learned chat or `TG_CHAT_ID`. Setup: [cmd/telegram-notify/README.md](../../cmd/telegram-notify/README.md).
+Run `telegram-notify` without arguments for first-time setup. Full setup and
+override instructions: [cmd/telegram-notify/README.md](../../cmd/telegram-notify/README.md).
 
 ## Asking the user a question
 
 When you need an answer from the user (not a one-way ping), block on:
 
 ```bash
-telegram-notify --prompt "your question here"
+telegram-notify --text "your question here" --prompt
 ```
 
-This sends the question, waits up to 5 minutes for a plain-text reply or an inline button tap, and prints the answer on stdout (button label or reply text). A button tap edits the question message to append `Answer: <label>` and reacts with 👍, so the choice stays visible; a text reply gets a 👀 reaction and the buttons are removed instead. If the user reacts to a "still there?" check-in near the deadline, the wait extends by 5 more minutes. On timeout the command exits non-zero, the chat gets a timeout notice, buttons are removed, and stdout is empty — treat that like any other missing answer (tell the user in chat, don't retry in a loop). Full details: [cmd/telegram-notify/README.md](../../cmd/telegram-notify/README.md).
+This sends the question, waits up to 5 minutes for a plain-text reply or an inline button tap, and prints the answer on stdout (button label or reply text). A button tap edits the question message to append `Answer: <label>` and reacts with 👍, so the choice stays visible; a text reply gets a 👀 reaction and the buttons are removed instead. If the user reacts to a "still there?" check-in near the deadline, the wait extends by 5 more minutes. On timeout the command exits non-zero, the chat gets a timeout notice, buttons are removed, and stdout is empty. Treat that like any other missing answer: tell the user in chat and don't retry in a loop. Full details: [cmd/telegram-notify/README.md](../../cmd/telegram-notify/README.md).
 
 For yes/no or fixed choices, add `--button` (repeatable):
 
 ```bash
-answer=$(telegram-notify --prompt "Proceed with deploy?" --button Yes --button No)
+answer=$(telegram-notify --text "Proceed with deploy?" --prompt --button Yes --button No)
 ```
 
-Use plain `--prompt` without `--button` when you want a free-form answer only.
+Use `--text "question" --prompt` without `--button` for a free-form answer.
 
 Use this only when you truly need their input; keep using a plain `telegram-notify` message for completion pings.
 
@@ -76,7 +78,7 @@ If `telegram-notify` exits non-zero (including a `--prompt` timeout), tell the u
 **After fixing a bug (user said "ping me in tlg when done"):**
 
 ```bash
-telegram-notify "Done: fixed login redirect loop"
+telegram-notify --text "Done: fixed login redirect loop"
 ```
 
 **Immediate ping with custom text:**
@@ -84,11 +86,11 @@ telegram-notify "Done: fixed login redirect loop"
 User: `$tlg tests green on main`
 
 ```bash
-telegram-notify "tests green on main"
+telegram-notify --text "tests green on main"
 ```
 
 **Need a decision before continuing (user is away from chat):**
 
 ```bash
-answer=$(telegram-notify --prompt "Deploy to prod now, or wait for review?" --button Deploy --button Wait)
+answer=$(telegram-notify --text "Deploy to prod now, or wait for review?" --prompt --button Deploy --button Wait)
 ```
