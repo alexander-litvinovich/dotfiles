@@ -32,6 +32,12 @@ const (
 	checkinExtension = 5 * time.Minute
 	checkinText      = "Still there? React to this message to get 5 more minutes."
 	timeoutText      = "Request timed out waiting for a reply."
+	callbackDataPref = "opt:"
+	eyesEmoji        = "\U0001F440"
+	// checkmarkEmoji acknowledges a button-tap answer. Telegram's setMessageReaction
+	// only accepts a fixed emoji set for bots and rejects "\u2705" (✅) with
+	// REACTION_INVALID, so thumbs-up is used instead.
+	checkmarkEmoji = "\U0001F44D"
 )
 
 var (
@@ -43,16 +49,26 @@ type config struct {
 	ChatID int64 `json:"chat_id"`
 }
 
+type promptAnswer struct {
+	text       string
+	replyMsgID int
+	callbackID string
+}
+
 type application struct {
-	getenv      func(string) string
-	stdout      io.Writer
-	now         func() time.Time
-	configPath  func() (string, error)
-	learn       func(context.Context, string, time.Time) (int64, error)
-	send        func(context.Context, string, any, string) error
-	sendTracked func(context.Context, string, any, string) (int, error)
-	awaitReply  func(context.Context, string, int64, time.Time) (string, int, error)
-	react       func(context.Context, string, int64, int) error
+	getenv         func(string) string
+	stdout         io.Writer
+	now            func() time.Time
+	configPath     func() (string, error)
+	learn          func(context.Context, string, time.Time) (int64, error)
+	send           func(context.Context, string, any, string) error
+	sendTracked    func(context.Context, string, any, string) (int, error)
+	sendPrompt     func(context.Context, string, any, string, []string) (int, error)
+	awaitAnswer    func(context.Context, string, int64, int, []string, time.Time) (promptAnswer, error)
+	answerCallback func(context.Context, string, string) error
+	removeKeyboard func(context.Context, string, int64, int) error
+	appendAnswer   func(context.Context, string, int64, int, string) error
+	react          func(context.Context, string, int64, int, string) error
 }
 
 func main() {
@@ -60,15 +76,19 @@ func main() {
 	defer stop()
 
 	app := application{
-		getenv:      os.Getenv,
-		stdout:      os.Stdout,
-		now:         time.Now,
-		configPath:  defaultConfigPath,
-		learn:       learnChat,
-		send:        sendMessage,
-		sendTracked: sendMessageTracked,
-		awaitReply:  awaitReply,
-		react:       reactEyes,
+		getenv:         os.Getenv,
+		stdout:         os.Stdout,
+		now:            time.Now,
+		configPath:     defaultConfigPath,
+		learn:          learnChat,
+		send:           sendMessage,
+		sendTracked:    sendMessageTracked,
+		sendPrompt:     sendPromptMessage,
+		awaitAnswer:    awaitAnswer,
+		answerCallback: answerCallbackQuery,
+		removeKeyboard: removeInlineKeyboard,
+		appendAnswer:   appendAnswerText,
+		react:          react,
 	}
 
 	if err := app.run(ctx, os.Args[1:]); err != nil {
@@ -91,11 +111,14 @@ func (app application) run(ctx context.Context, args []string) error {
 	}
 
 	if len(args) >= 1 && args[0] == "--prompt" {
-		question := strings.Join(args[1:], " ")
-		if strings.TrimSpace(question) == "" {
-			return errors.New("question is required; usage: telegram-notify --prompt <question>")
+		question, buttons, err := parsePromptArgs(args[1:])
+		if err != nil {
+			return err
 		}
-		return app.runPrompt(ctx, token, question)
+		if strings.TrimSpace(question) == "" {
+			return errors.New("question is required; usage: telegram-notify --prompt <question> [--button <label> ...]")
+		}
+		return app.runPrompt(ctx, token, question, buttons)
 	}
 
 	message := strings.Join(args, " ")
@@ -112,6 +135,22 @@ func (app application) run(ctx context.Context, args []string) error {
 		return fmt.Errorf("send message: %w", err)
 	}
 	return nil
+}
+
+func parsePromptArgs(args []string) (question string, buttons []string, err error) {
+	var questionParts []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--button" {
+			if i+1 >= len(args) {
+				return "", nil, errors.New("--button requires a label")
+			}
+			i++
+			buttons = append(buttons, args[i])
+			continue
+		}
+		questionParts = append(questionParts, args[i])
+	}
+	return strings.Join(questionParts, " "), buttons, nil
 }
 
 func (app application) runLearn(ctx context.Context, token string) error {
@@ -138,7 +177,7 @@ func (app application) runLearn(ctx context.Context, token string) error {
 	return nil
 }
 
-func (app application) runPrompt(ctx context.Context, token, question string) error {
+func (app application) runPrompt(ctx context.Context, token, question string, buttons []string) error {
 	chatID, err := app.resolveChatID()
 	if err != nil {
 		return err
@@ -149,12 +188,18 @@ func (app application) runPrompt(ctx context.Context, token, question string) er
 	}
 
 	sentAt := app.now()
-	if err := app.send(ctx, token, chatID, question); err != nil {
+	msgID, err := app.sendPrompt(ctx, token, chatID, question, buttons)
+	if err != nil {
 		return fmt.Errorf("send prompt: %w", err)
 	}
 
-	replyText, messageID, err := app.awaitReply(ctx, token, numericChatID, sentAt)
+	ans, err := app.awaitAnswer(ctx, token, numericChatID, msgID, buttons, sentAt)
 	if err != nil {
+		if len(buttons) > 0 {
+			if rmErr := app.removeKeyboard(ctx, token, numericChatID, msgID); rmErr != nil {
+				fmt.Fprintf(os.Stderr, "telegram-notify: failed to remove keyboard: %s\n", rmErr)
+			}
+		}
 		if errors.Is(err, errPromptTimeout) {
 			if sendErr := app.send(ctx, token, chatID, timeoutText); sendErr != nil {
 				fmt.Fprintf(os.Stderr, "telegram-notify: failed to send timeout notice: %s\n", sendErr)
@@ -163,11 +208,29 @@ func (app application) runPrompt(ctx context.Context, token, question string) er
 		return err
 	}
 
-	if err := app.react(ctx, token, numericChatID, messageID); err != nil {
-		fmt.Fprintf(os.Stderr, "telegram-notify: react with eyes failed: %s\n", err)
+	if ans.callbackID != "" {
+		if err := app.answerCallback(ctx, token, ans.callbackID); err != nil {
+			fmt.Fprintf(os.Stderr, "telegram-notify: answer callback failed: %s\n", err)
+		}
+		answeredText := question + "\n\nAnswer: " + ans.text
+		if err := app.appendAnswer(ctx, token, numericChatID, msgID, answeredText); err != nil {
+			fmt.Fprintf(os.Stderr, "telegram-notify: failed to record answer on message: %s\n", err)
+		}
+		if err := app.react(ctx, token, numericChatID, msgID, checkmarkEmoji); err != nil {
+			fmt.Fprintf(os.Stderr, "telegram-notify: react with checkmark failed: %s\n", err)
+		}
+	} else {
+		if len(buttons) > 0 {
+			if err := app.removeKeyboard(ctx, token, numericChatID, msgID); err != nil {
+				fmt.Fprintf(os.Stderr, "telegram-notify: failed to remove keyboard: %s\n", err)
+			}
+		}
+		if err := app.react(ctx, token, numericChatID, ans.replyMsgID, eyesEmoji); err != nil {
+			fmt.Fprintf(os.Stderr, "telegram-notify: react with eyes failed: %s\n", err)
+		}
 	}
 
-	fmt.Fprintln(app.stdout, replyText)
+	fmt.Fprintln(app.stdout, ans.text)
 	return nil
 }
 
@@ -262,6 +325,20 @@ func saveConfig(path string, cfg config) error {
 	return os.Rename(tmpName, path)
 }
 
+func inlineKeyboard(buttons []string) *models.InlineKeyboardMarkup {
+	if len(buttons) == 0 {
+		return nil
+	}
+	row := make([]models.InlineKeyboardButton, len(buttons))
+	for i, label := range buttons {
+		row[i] = models.InlineKeyboardButton{
+			Text:         label,
+			CallbackData: callbackDataPref + strconv.Itoa(i),
+		}
+	}
+	return &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{row}}
+}
+
 func sendMessage(ctx context.Context, token string, chatID any, message string) error {
 	client, err := bot.New(
 		token,
@@ -276,6 +353,30 @@ func sendMessage(ctx context.Context, token string, chatID any, message string) 
 	defer cancel()
 	_, err = client.SendMessage(requestCtx, &bot.SendMessageParams{ChatID: chatID, Text: message})
 	return err
+}
+
+func sendPromptMessage(ctx context.Context, token string, chatID any, question string, buttons []string) (int, error) {
+	client, err := bot.New(
+		token,
+		bot.WithSkipGetMe(),
+		bot.WithHTTPClient(requestTimeout, &http.Client{Timeout: requestTimeout}),
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	params := &bot.SendMessageParams{ChatID: chatID, Text: question}
+	if markup := inlineKeyboard(buttons); markup != nil {
+		params.ReplyMarkup = markup
+	}
+
+	requestCtx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+	msg, err := client.SendMessage(requestCtx, params)
+	if err != nil {
+		return 0, err
+	}
+	return msg.ID, nil
 }
 
 func sendMessageTracked(ctx context.Context, token string, chatID any, message string) (int, error) {
@@ -297,7 +398,70 @@ func sendMessageTracked(ctx context.Context, token string, chatID any, message s
 	return msg.ID, nil
 }
 
-func reactEyes(ctx context.Context, token string, chatID int64, messageID int) error {
+func answerCallbackQuery(ctx context.Context, token, callbackQueryID string) error {
+	client, err := bot.New(
+		token,
+		bot.WithSkipGetMe(),
+		bot.WithHTTPClient(requestTimeout, &http.Client{Timeout: requestTimeout}),
+	)
+	if err != nil {
+		return err
+	}
+
+	requestCtx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+	_, err = client.AnswerCallbackQuery(requestCtx, &bot.AnswerCallbackQueryParams{
+		CallbackQueryID: callbackQueryID,
+	})
+	return err
+}
+
+func removeInlineKeyboard(ctx context.Context, token string, chatID int64, messageID int) error {
+	client, err := bot.New(
+		token,
+		bot.WithSkipGetMe(),
+		bot.WithHTTPClient(requestTimeout, &http.Client{Timeout: requestTimeout}),
+	)
+	if err != nil {
+		return err
+	}
+
+	requestCtx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+	_, err = client.EditMessageReplyMarkup(requestCtx, &bot.EditMessageReplyMarkupParams{
+		ChatID:    chatID,
+		MessageID: messageID,
+		ReplyMarkup: models.InlineKeyboardMarkup{
+			InlineKeyboard: [][]models.InlineKeyboardButton{},
+		},
+	})
+	return err
+}
+
+func appendAnswerText(ctx context.Context, token string, chatID int64, messageID int, text string) error {
+	client, err := bot.New(
+		token,
+		bot.WithSkipGetMe(),
+		bot.WithHTTPClient(requestTimeout, &http.Client{Timeout: requestTimeout}),
+	)
+	if err != nil {
+		return err
+	}
+
+	requestCtx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+	_, err = client.EditMessageText(requestCtx, &bot.EditMessageTextParams{
+		ChatID:    chatID,
+		MessageID: messageID,
+		Text:      text,
+		ReplyMarkup: models.InlineKeyboardMarkup{
+			InlineKeyboard: [][]models.InlineKeyboardButton{},
+		},
+	})
+	return err
+}
+
+func react(ctx context.Context, token string, chatID int64, messageID int, emoji string) error {
 	client, err := bot.New(
 		token,
 		bot.WithSkipGetMe(),
@@ -314,18 +478,14 @@ func reactEyes(ctx context.Context, token string, chatID int64, messageID int) e
 		MessageID: messageID,
 		Reaction: []models.ReactionType{{
 			Type:              models.ReactionTypeTypeEmoji,
-			ReactionTypeEmoji: &models.ReactionTypeEmoji{Emoji: "\U0001F440"},
+			ReactionTypeEmoji: &models.ReactionTypeEmoji{Emoji: emoji},
 		}},
 	})
 	return err
 }
 
-func awaitReply(ctx context.Context, token string, chatID int64, after time.Time) (string, int, error) {
-	type result struct {
-		text string
-		id   int
-	}
-	found := make(chan result, 1)
+func awaitAnswer(ctx context.Context, token string, chatID int64, questionMsgID int, buttons []string, after time.Time) (promptAnswer, error) {
+	found := make(chan promptAnswer, 1)
 	extend := make(chan struct{}, 1)
 	failures := make(chan error, 1)
 
@@ -336,9 +496,16 @@ func awaitReply(ctx context.Context, token string, chatID int64, after time.Time
 	)
 
 	handler := func(_ context.Context, _ *bot.Bot, update *models.Update) {
+		if ans := matchingCallback(update, chatID, questionMsgID, buttons); ans != nil {
+			select {
+			case found <- *ans:
+			default:
+			}
+			return
+		}
 		if msg := matchingReply(update, chatID, after); msg != nil {
 			select {
-			case found <- result{msg.Text, msg.ID}:
+			case found <- promptAnswer{text: msg.Text, replyMsgID: msg.ID}:
 			default:
 			}
 			return
@@ -368,11 +535,15 @@ func awaitReply(ctx context.Context, token string, chatID int64, after time.Time
 		bot.WithSkipGetMe(),
 		bot.WithDefaultHandler(handler),
 		bot.WithErrorsHandler(errorHandler),
-		bot.WithAllowedUpdates(bot.AllowedUpdates{models.AllowedUpdateMessage, models.AllowedUpdateMessageReaction}),
+		bot.WithAllowedUpdates(bot.AllowedUpdates{
+			models.AllowedUpdateMessage,
+			models.AllowedUpdateMessageReaction,
+			models.AllowedUpdateCallbackQuery,
+		}),
 		bot.WithHTTPClient(pollTimeout, &http.Client{Timeout: pollTimeout + 5*time.Second}),
 	)
 	if err != nil {
-		return "", 0, err
+		return promptAnswer{}, err
 	}
 	go client.Start(waitCtx)
 
@@ -382,12 +553,12 @@ func awaitReply(ctx context.Context, token string, chatID int64, after time.Time
 
 	for {
 		select {
-		case r := <-found:
-			return r.text, r.id, nil
+		case ans := <-found:
+			return ans, nil
 		case err := <-failures:
-			return "", 0, err
+			return promptAnswer{}, err
 		case <-ctx.Done():
-			return "", 0, ctx.Err()
+			return promptAnswer{}, ctx.Err()
 		case <-extend:
 			deadline = time.Now().Add(checkinExtension)
 			mu.Lock()
@@ -408,7 +579,7 @@ func awaitReply(ctx context.Context, token string, chatID int64, after time.Time
 				resetTimer(timer, time.Until(deadline))
 				continue
 			}
-			return "", 0, errPromptTimeout
+			return promptAnswer{}, errPromptTimeout
 		}
 	}
 }
@@ -418,6 +589,29 @@ func resetTimer(t *time.Timer, d time.Duration) {
 		d = 0
 	}
 	t.Reset(d)
+}
+
+func matchingCallback(update *models.Update, chatID int64, questionMsgID int, buttons []string) *promptAnswer {
+	if update == nil || update.CallbackQuery == nil || len(buttons) == 0 {
+		return nil
+	}
+	cq := update.CallbackQuery
+	if cq.Message.Message == nil {
+		return nil
+	}
+	msg := cq.Message.Message
+	if msg.Chat.ID != chatID || msg.ID != questionMsgID {
+		return nil
+	}
+	if !strings.HasPrefix(cq.Data, callbackDataPref) {
+		return nil
+	}
+	idxStr := strings.TrimPrefix(cq.Data, callbackDataPref)
+	idx, err := strconv.Atoi(idxStr)
+	if err != nil || idx < 0 || idx >= len(buttons) {
+		return nil
+	}
+	return &promptAnswer{text: buttons[idx], callbackID: cq.ID}
 }
 
 func matchingReply(update *models.Update, chatID int64, after time.Time) *models.Message {

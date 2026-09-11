@@ -52,6 +52,26 @@ The command sends the question, then waits up to five minutes for a plain-text
 reply in the configured chat. When a reply arrives, the bot reacts with 👀 on
 that message and prints the reply text on stdout.
 
+Add preset answers with repeatable `--button` flags. The bot attaches inline
+buttons under the question; tapping a button counts as an answer and prints
+that button's label on stdout. Plain-text replies still work (for example when
+none of the buttons fit).
+
+```bash
+telegram-notify --prompt "Proceed with doing?" --button Yes --button No
+
+telegram-notify --prompt $'What should we do\nA) Do this\nB) Do that\nReply if nothing fits' \
+  --button A --button B --button C
+```
+
+When a button is tapped, the buttons disappear and the question message is
+edited to append `Answer: <label>`, so the choice stays visible in the chat
+history; the message gets a 👍 reaction (Telegram bots can only use a fixed
+set of reaction emoji, and ✅ is not one of them). When you reply with plain
+text instead, the buttons are removed from the question message and the bot
+reacts with 👀 on your reply. Buttons are also removed if the prompt times
+out.
+
 About 30 seconds before the deadline, if there is still no reply, the bot sends
 a check-in message. React to that message with any emoji to get five more
 minutes; this can repeat as long as you keep reacting before time runs out.
@@ -61,9 +81,9 @@ reply.` to the chat, prints an error on stderr, and exits with a non-zero
 status. Nothing is written to stdout.
 
 `--prompt` requires a private or group chat ID (learned config or numeric
-`TG_CHAT_ID`). Channel usernames (`@channel`) are not supported. Only text
-messages count as answers; photos, stickers, and other non-text messages are
-ignored.
+`TG_CHAT_ID`). Channel usernames (`@channel`) are not supported. Text messages
+and inline button taps count as answers; photos, stickers, and other non-text
+messages are ignored.
 
 Prompt mode also uses long polling and cannot run while the bot has an active
 webhook.
