@@ -136,6 +136,12 @@ Batch file renaming utility:
 - Preserves file extensions
 - Useful for anonymizing file names
 
+#### `telegram-notify`
+
+Personal Telegram notifier for scripts and coding agents. See
+[`cmd/telegram-notify/README.md`](cmd/telegram-notify/README.md) for setup
+and usage.
+
 ### `configs/`
 
 Contains dotfiles to be symlinked to home directory:
