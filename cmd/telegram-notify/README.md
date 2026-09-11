@@ -38,3 +38,32 @@ TG_CHAT_ID=-1001234567890 telegram-notify "Deployment finished"
 
 Learning mode uses Telegram long polling and cannot run while the bot has an
 active webhook. Press `Ctrl+C` to stop waiting for `/start`.
+
+## Prompting for a reply
+
+Ask a question and block until the user answers in Telegram (for agents and
+scripts that need input):
+
+```bash
+telegram-notify --prompt "Which environment should I deploy to?"
+```
+
+The command sends the question, then waits up to five minutes for a plain-text
+reply in the configured chat. When a reply arrives, the bot reacts with 👀 on
+that message and prints the reply text on stdout.
+
+About 30 seconds before the deadline, if there is still no reply, the bot sends
+a check-in message. React to that message with any emoji to get five more
+minutes; this can repeat as long as you keep reacting before time runs out.
+
+If the wait ends with no reply, the bot sends `Request timed out waiting for a
+reply.` to the chat, prints an error on stderr, and exits with a non-zero
+status. Nothing is written to stdout.
+
+`--prompt` requires a private or group chat ID (learned config or numeric
+`TG_CHAT_ID`). Channel usernames (`@channel`) are not supported. Only text
+messages count as answers; photos, stickers, and other non-text messages are
+ignored.
+
+Prompt mode also uses long polling and cannot run while the bot has an active
+webhook.

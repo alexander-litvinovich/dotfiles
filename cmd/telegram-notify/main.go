@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -20,27 +21,38 @@ import (
 )
 
 const (
-	botTokenEnv    = "TG_BOT_TOKEN"
-	chatIDEnv      = "TG_CHAT_ID"
-	configDirName  = "telegram-notify"
-	configName     = "config.json"
-	requestTimeout = 10 * time.Second
-	pollTimeout    = 30 * time.Second
+	botTokenEnv      = "TG_BOT_TOKEN"
+	chatIDEnv        = "TG_CHAT_ID"
+	configDirName    = "telegram-notify"
+	configName       = "config.json"
+	requestTimeout   = 10 * time.Second
+	pollTimeout      = 30 * time.Second
+	promptTimeout    = 5 * time.Minute
+	checkinLeadTime  = 30 * time.Second
+	checkinExtension = 5 * time.Minute
+	checkinText      = "Still there? React to this message to get 5 more minutes."
+	timeoutText      = "Request timed out waiting for a reply."
 )
 
-var errNoSavedChat = errors.New("no saved chat ID")
+var (
+	errNoSavedChat   = errors.New("no saved chat ID")
+	errPromptTimeout = errors.New("timed out waiting for a reply")
+)
 
 type config struct {
 	ChatID int64 `json:"chat_id"`
 }
 
 type application struct {
-	getenv     func(string) string
-	stdout     io.Writer
-	now        func() time.Time
-	configPath func() (string, error)
-	learn      func(context.Context, string, time.Time) (int64, error)
-	send       func(context.Context, string, any, string) error
+	getenv      func(string) string
+	stdout      io.Writer
+	now         func() time.Time
+	configPath  func() (string, error)
+	learn       func(context.Context, string, time.Time) (int64, error)
+	send        func(context.Context, string, any, string) error
+	sendTracked func(context.Context, string, any, string) (int, error)
+	awaitReply  func(context.Context, string, int64, time.Time) (string, int, error)
+	react       func(context.Context, string, int64, int) error
 }
 
 func main() {
@@ -48,12 +60,15 @@ func main() {
 	defer stop()
 
 	app := application{
-		getenv:     os.Getenv,
-		stdout:     os.Stdout,
-		now:        time.Now,
-		configPath: defaultConfigPath,
-		learn:      learnChat,
-		send:       sendMessage,
+		getenv:      os.Getenv,
+		stdout:      os.Stdout,
+		now:         time.Now,
+		configPath:  defaultConfigPath,
+		learn:       learnChat,
+		send:        sendMessage,
+		sendTracked: sendMessageTracked,
+		awaitReply:  awaitReply,
+		react:       reactEyes,
 	}
 
 	if err := app.run(ctx, os.Args[1:]); err != nil {
@@ -73,6 +88,14 @@ func (app application) run(ctx context.Context, args []string) error {
 	}
 	if len(args) > 0 && args[0] == "--learn" {
 		return errors.New("--learn does not accept arguments")
+	}
+
+	if len(args) >= 1 && args[0] == "--prompt" {
+		question := strings.Join(args[1:], " ")
+		if strings.TrimSpace(question) == "" {
+			return errors.New("question is required; usage: telegram-notify --prompt <question>")
+		}
+		return app.runPrompt(ctx, token, question)
 	}
 
 	message := strings.Join(args, " ")
@@ -112,6 +135,39 @@ func (app application) runLearn(ctx context.Context, token string) error {
 	}
 
 	fmt.Fprintf(app.stdout, "Connected to chat %d.\n", chatID)
+	return nil
+}
+
+func (app application) runPrompt(ctx context.Context, token, question string) error {
+	chatID, err := app.resolveChatID()
+	if err != nil {
+		return err
+	}
+	numericChatID, ok := chatID.(int64)
+	if !ok {
+		return errors.New("--prompt requires a private/group chat, not a channel username")
+	}
+
+	sentAt := app.now()
+	if err := app.send(ctx, token, chatID, question); err != nil {
+		return fmt.Errorf("send prompt: %w", err)
+	}
+
+	replyText, messageID, err := app.awaitReply(ctx, token, numericChatID, sentAt)
+	if err != nil {
+		if errors.Is(err, errPromptTimeout) {
+			if sendErr := app.send(ctx, token, chatID, timeoutText); sendErr != nil {
+				fmt.Fprintf(os.Stderr, "telegram-notify: failed to send timeout notice: %s\n", sendErr)
+			}
+		}
+		return err
+	}
+
+	if err := app.react(ctx, token, numericChatID, messageID); err != nil {
+		fmt.Fprintf(os.Stderr, "telegram-notify: react with eyes failed: %s\n", err)
+	}
+
+	fmt.Fprintln(app.stdout, replyText)
 	return nil
 }
 
@@ -220,6 +276,173 @@ func sendMessage(ctx context.Context, token string, chatID any, message string) 
 	defer cancel()
 	_, err = client.SendMessage(requestCtx, &bot.SendMessageParams{ChatID: chatID, Text: message})
 	return err
+}
+
+func sendMessageTracked(ctx context.Context, token string, chatID any, message string) (int, error) {
+	client, err := bot.New(
+		token,
+		bot.WithSkipGetMe(),
+		bot.WithHTTPClient(requestTimeout, &http.Client{Timeout: requestTimeout}),
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	requestCtx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+	msg, err := client.SendMessage(requestCtx, &bot.SendMessageParams{ChatID: chatID, Text: message})
+	if err != nil {
+		return 0, err
+	}
+	return msg.ID, nil
+}
+
+func reactEyes(ctx context.Context, token string, chatID int64, messageID int) error {
+	client, err := bot.New(
+		token,
+		bot.WithSkipGetMe(),
+		bot.WithHTTPClient(requestTimeout, &http.Client{Timeout: requestTimeout}),
+	)
+	if err != nil {
+		return err
+	}
+
+	requestCtx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+	_, err = client.SetMessageReaction(requestCtx, &bot.SetMessageReactionParams{
+		ChatID:    chatID,
+		MessageID: messageID,
+		Reaction: []models.ReactionType{{
+			Type:              models.ReactionTypeTypeEmoji,
+			ReactionTypeEmoji: &models.ReactionTypeEmoji{Emoji: "\U0001F440"},
+		}},
+	})
+	return err
+}
+
+func awaitReply(ctx context.Context, token string, chatID int64, after time.Time) (string, int, error) {
+	type result struct {
+		text string
+		id   int
+	}
+	found := make(chan result, 1)
+	extend := make(chan struct{}, 1)
+	failures := make(chan error, 1)
+
+	var (
+		mu           sync.Mutex
+		checkinSent  bool
+		checkinMsgID int
+	)
+
+	handler := func(_ context.Context, _ *bot.Bot, update *models.Update) {
+		if msg := matchingReply(update, chatID, after); msg != nil {
+			select {
+			case found <- result{msg.Text, msg.ID}:
+			default:
+			}
+			return
+		}
+		mu.Lock()
+		id, sent := checkinMsgID, checkinSent
+		mu.Unlock()
+		if sent && matchesCheckinReaction(update, chatID, id) {
+			select {
+			case extend <- struct{}{}:
+			default:
+			}
+		}
+	}
+	errorHandler := func(err error) {
+		select {
+		case failures <- err:
+		default:
+		}
+	}
+
+	waitCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	client, err := bot.New(
+		token,
+		bot.WithSkipGetMe(),
+		bot.WithDefaultHandler(handler),
+		bot.WithErrorsHandler(errorHandler),
+		bot.WithAllowedUpdates(bot.AllowedUpdates{models.AllowedUpdateMessage, models.AllowedUpdateMessageReaction}),
+		bot.WithHTTPClient(pollTimeout, &http.Client{Timeout: pollTimeout + 5*time.Second}),
+	)
+	if err != nil {
+		return "", 0, err
+	}
+	go client.Start(waitCtx)
+
+	deadline := after.Add(promptTimeout)
+	timer := time.NewTimer(time.Until(deadline) - checkinLeadTime)
+	defer timer.Stop()
+
+	for {
+		select {
+		case r := <-found:
+			return r.text, r.id, nil
+		case err := <-failures:
+			return "", 0, err
+		case <-ctx.Done():
+			return "", 0, ctx.Err()
+		case <-extend:
+			deadline = time.Now().Add(checkinExtension)
+			mu.Lock()
+			checkinSent = false
+			mu.Unlock()
+			resetTimer(timer, time.Until(deadline)-checkinLeadTime)
+		case <-timer.C:
+			mu.Lock()
+			sent := checkinSent
+			mu.Unlock()
+			if !sent {
+				id, sendErr := sendMessageTracked(ctx, token, chatID, checkinText)
+				if sendErr == nil {
+					mu.Lock()
+					checkinSent, checkinMsgID = true, id
+					mu.Unlock()
+				}
+				resetTimer(timer, time.Until(deadline))
+				continue
+			}
+			return "", 0, errPromptTimeout
+		}
+	}
+}
+
+func resetTimer(t *time.Timer, d time.Duration) {
+	if d < 0 {
+		d = 0
+	}
+	t.Reset(d)
+}
+
+func matchingReply(update *models.Update, chatID int64, after time.Time) *models.Message {
+	if update == nil || update.Message == nil {
+		return nil
+	}
+	message := update.Message
+	if message.Chat.ID != chatID || int64(message.Date) < after.Unix() {
+		return nil
+	}
+	if strings.TrimSpace(message.Text) == "" {
+		return nil
+	}
+	return message
+}
+
+func matchesCheckinReaction(update *models.Update, chatID int64, messageID int) bool {
+	if update == nil {
+		return false
+	}
+	r := update.MessageReaction
+	if r == nil {
+		return false
+	}
+	return r.Chat.ID == chatID && r.MessageID == messageID && len(r.NewReaction) > 0
 }
 
 func learnChat(ctx context.Context, token string, startedAt time.Time) (int64, error) {
