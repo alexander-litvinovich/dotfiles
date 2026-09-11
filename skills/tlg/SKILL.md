@@ -2,21 +2,29 @@
 name: tlg
 description: >
   Sends one brief Telegram push notification via telegram-notify when a task
-  finishes. Use when the user invokes /tlg or $tlg, asks to notify them in
-  Telegram, send them a message, ping in tlg, or says "скинуть в телегу", or
-  when a long multi-step process completes and they wanted a ping at the end.
+  finishes, or blocks on a Telegram question via telegram-notify --prompt when
+  the agent needs the user's input. Use when the user invokes /tlg or $tlg,
+  asks to notify them in Telegram, send them a message, ping in tlg, or says
+  "скинуть в телегу"; when a long multi-step process completes and they
+  wanted a ping at the end; or when the agent needs to ask the user something
+  and wait for their answer over Telegram instead of blocking chat.
 argument-hint: "[message]"
 ---
 
 # tlg
 
-Ping the user on Telegram once. Not a log stream.
+Ping the user on Telegram once, or ask them a question and wait for the reply. Not a log stream.
 
 ## When to send
 
 - **Once per invocation**, at the very end of the work (after the normal chat reply is ready).
 - Send when triggered explicitly (`/tlg`, `$tlg`, or natural-language requests above), or when the user asked for a Telegram ping and a long or multi-step task just finished.
 - **Do not** send progress updates, intermediate steps, or more than one message per task.
+
+## When to prompt instead
+
+- Use the prompt flow (below) only when you genuinely need the user's answer to proceed, and they're likely away from chat (e.g. a long task and they asked to be pinged, or they're only reachable via Telegram right now).
+- Prefer asking directly in chat when the user is actively present; the prompt flow is for cases where Telegram is the more reliable channel.
 
 ## How to send
 
@@ -25,6 +33,18 @@ telegram-notify "your message here"
 ```
 
 Requires `TG_BOT_TOKEN` and a learned chat or `TG_CHAT_ID`. Setup: [cmd/telegram-notify/README.md](../../cmd/telegram-notify/README.md).
+
+## Asking the user a question
+
+When you need an answer from the user (not a one-way ping), block on:
+
+```bash
+telegram-notify --prompt "your question here"
+```
+
+This sends the question, waits up to 5 minutes for a plain-text reply, reacts to it with 👀, and prints the reply text on stdout for you to use. If the user reacts to a "still there?" check-in near the deadline, the wait extends by 5 more minutes. On timeout the command exits non-zero, the chat gets a timeout notice, and stdout is empty — treat that like any other missing answer (tell the user in chat, don't retry in a loop). Full details: [cmd/telegram-notify/README.md](../../cmd/telegram-notify/README.md).
+
+Use this only when you truly need their input; keep using a plain `telegram-notify` message for completion pings.
 
 ## Message content
 
@@ -41,7 +61,7 @@ Keep it push-notification sized: a few words to one short sentence. No stack tra
 
 ## Errors
 
-If `telegram-notify` exits non-zero, tell the user once in chat what failed (stderr is enough). Point them to [cmd/telegram-notify/README.md](../../cmd/telegram-notify/README.md). Do not retry in a loop.
+If `telegram-notify` exits non-zero (including a `--prompt` timeout), tell the user once in chat what failed (stderr is enough). Point them to [cmd/telegram-notify/README.md](../../cmd/telegram-notify/README.md). Do not retry in a loop.
 
 ## Examples
 
@@ -57,4 +77,10 @@ User: `$tlg tests green on main`
 
 ```bash
 telegram-notify "tests green on main"
+```
+
+**Need a decision before continuing (user is away from chat):**
+
+```bash
+answer=$(telegram-notify --prompt "Deploy to prod now, or wait for review?")
 ```

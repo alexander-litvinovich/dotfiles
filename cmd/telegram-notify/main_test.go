@@ -183,5 +183,171 @@ func testApplication(env map[string]string) application {
 		send: func(context.Context, string, any, string) error {
 			return errors.New("unexpected send")
 		},
+		sendTracked: func(context.Context, string, any, string) (int, error) {
+			return 0, errors.New("unexpected sendTracked")
+		},
+		awaitReply: func(context.Context, string, int64, time.Time) (string, int, error) {
+			return "", 0, errors.New("unexpected awaitReply")
+		},
+		react: func(context.Context, string, int64, int) error {
+			return errors.New("unexpected react")
+		},
+	}
+}
+
+func TestRunPromptSendsQuestionAndReturnsReply(t *testing.T) {
+	var sends []string
+	var reactedChat int64
+	var reactedMsg int
+	var stdout strings.Builder
+	app := testApplication(map[string]string{botTokenEnv: "secret", chatIDEnv: "42"})
+	app.stdout = &stdout
+	app.send = func(_ context.Context, _ string, chatID any, message string) error {
+		if chatID != int64(42) {
+			t.Fatalf("unexpected chat %v", chatID)
+		}
+		sends = append(sends, message)
+		return nil
+	}
+	app.awaitReply = func(_ context.Context, _ string, chatID int64, _ time.Time) (string, int, error) {
+		if chatID != 42 {
+			t.Fatalf("unexpected chat %d", chatID)
+		}
+		return "user answer", 99, nil
+	}
+	app.react = func(_ context.Context, _ string, chatID int64, messageID int) error {
+		reactedChat, reactedMsg = chatID, messageID
+		return nil
+	}
+
+	if err := app.run(context.Background(), []string{"--prompt", "pick", "one"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(sends) != 1 || sends[0] != "pick one" {
+		t.Fatalf("unexpected sends %#v", sends)
+	}
+	if reactedChat != 42 || reactedMsg != 99 {
+		t.Fatalf("unexpected react chat=%d msg=%d", reactedChat, reactedMsg)
+	}
+	if stdout.String() != "user answer\n" {
+		t.Fatalf("stdout %q", stdout.String())
+	}
+}
+
+func TestRunPromptTimesOutAndNotifiesChat(t *testing.T) {
+	var sends []string
+	app := testApplication(map[string]string{botTokenEnv: "secret", chatIDEnv: "42"})
+	app.send = func(_ context.Context, _ string, _ any, message string) error {
+		sends = append(sends, message)
+		return nil
+	}
+	app.awaitReply = func(context.Context, string, int64, time.Time) (string, int, error) {
+		return "", 0, errPromptTimeout
+	}
+
+	err := app.run(context.Background(), []string{"--prompt", "hello?"})
+	if !errors.Is(err, errPromptTimeout) {
+		t.Fatalf("got %v", err)
+	}
+	if len(sends) != 2 || sends[0] != "hello?" || sends[1] != timeoutText {
+		t.Fatalf("unexpected sends %#v", sends)
+	}
+}
+
+func TestRunPromptRequiresChat(t *testing.T) {
+	app := testApplication(map[string]string{botTokenEnv: "secret", chatIDEnv: "@alerts"})
+	err := app.run(context.Background(), []string{"--prompt", "hello?"})
+	if err == nil || !strings.Contains(err.Error(), "private/group chat") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestRunPromptRequiresQuestion(t *testing.T) {
+	app := testApplication(map[string]string{botTokenEnv: "secret", chatIDEnv: "42"})
+	err := app.run(context.Background(), []string{"--prompt"})
+	if err == nil || !strings.Contains(err.Error(), "question is required") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestRunPromptReactFailureStillReturnsReply(t *testing.T) {
+	var stdout strings.Builder
+	app := testApplication(map[string]string{botTokenEnv: "secret", chatIDEnv: "42"})
+	app.stdout = &stdout
+	app.send = func(context.Context, string, any, string) error { return nil }
+	app.awaitReply = func(context.Context, string, int64, time.Time) (string, int, error) {
+		return "ok", 1, nil
+	}
+	app.react = func(context.Context, string, int64, int) error {
+		return errors.New("reaction failed")
+	}
+
+	if err := app.run(context.Background(), []string{"--prompt", "q"}); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "ok\n" {
+		t.Fatalf("stdout %q", stdout.String())
+	}
+}
+
+func TestMatchingReply(t *testing.T) {
+	after := time.Unix(100, 0)
+	valid := &models.Update{Message: &models.Message{
+		Date: 100,
+		Text: "answer",
+		Chat: models.Chat{ID: 42},
+	}}
+	if msg := matchingReply(valid, 42, after); msg == nil || msg.Text != "answer" {
+		t.Fatal("expected valid reply")
+	}
+
+	wrongChat := *valid.Message
+	wrongChat.Chat.ID = 1
+	stale := *valid.Message
+	stale.Date = 99
+	empty := *valid.Message
+	empty.Text = "   "
+	for name, update := range map[string]*models.Update{
+		"wrong chat": {Message: &wrongChat},
+		"stale":      {Message: &stale},
+		"empty":      {Message: &empty},
+		"nil":        nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if matchingReply(update, 42, after) != nil {
+				t.Fatal("unexpected match")
+			}
+		})
+	}
+}
+
+func TestMatchesCheckinReaction(t *testing.T) {
+	valid := &models.Update{MessageReaction: &models.MessageReactionUpdated{
+		Chat:        models.Chat{ID: 42},
+		MessageID:   7,
+		NewReaction: []models.ReactionType{{Type: models.ReactionTypeTypeEmoji}},
+	}}
+	if !matchesCheckinReaction(valid, 42, 7) {
+		t.Fatal("expected match")
+	}
+
+	wrongChat := *valid.MessageReaction
+	wrongChat.Chat.ID = 1
+	wrongMsg := *valid.MessageReaction
+	wrongMsg.MessageID = 8
+	empty := *valid.MessageReaction
+	empty.NewReaction = nil
+	for name, update := range map[string]*models.Update{
+		"nil update":  nil,
+		"no reaction": {Message: &models.Message{}},
+		"wrong chat":  {MessageReaction: &wrongChat},
+		"wrong msg":   {MessageReaction: &wrongMsg},
+		"empty":       {MessageReaction: &empty},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if matchesCheckinReaction(update, 42, 7) {
+				t.Fatal("unexpected match")
+			}
+		})
 	}
 }
