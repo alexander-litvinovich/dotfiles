@@ -138,7 +138,11 @@ Batch file renaming utility:
 
 #### `telegram-notify`
 
-Personal Telegram notifier for scripts and coding agents. See
+Personal Telegram notifier for scripts and coding agents. First setup is an
+interactive chat wizard: run `telegram-notify` in a terminal with no
+arguments. An agent can also guide setup non-interactively with
+`--set-token` and `--learn`. Unconfigured commands print
+`not configured: missing ...` to stdout and exit 1. See
 [`cmd/telegram-notify/README.md`](cmd/telegram-notify/README.md) for setup
 and usage.
 

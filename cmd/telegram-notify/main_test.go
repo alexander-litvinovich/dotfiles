@@ -26,7 +26,7 @@ func TestRunSendsMessageToEnvironmentChat(t *testing.T) {
 		return nil
 	}
 
-	if err := app.run(context.Background(), []string{"job", "finished"}); err != nil {
+	if err := app.run(context.Background(), []string{"--text", "job finished"}); err != nil {
 		t.Fatal(err)
 	}
 	if gotToken != "secret" || gotChatID != int64(-123) || gotMessage != "job finished" {
@@ -36,7 +36,7 @@ func TestRunSendsMessageToEnvironmentChat(t *testing.T) {
 
 func TestRunUsesSavedChat(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	if err := saveConfig(path, config{ChatID: 456}); err != nil {
+	if err := saveConfig(path, config{ChatID: &chatTarget{value: int64(456)}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -48,7 +48,7 @@ func TestRunUsesSavedChat(t *testing.T) {
 		return nil
 	}
 
-	if err := app.run(context.Background(), []string{"done"}); err != nil {
+	if err := app.run(context.Background(), []string{"--text", "done"}); err != nil {
 		t.Fatal(err)
 	}
 	if gotChatID != int64(456) {
@@ -64,7 +64,7 @@ func TestRunAllowsChannelUsername(t *testing.T) {
 		}
 		return nil
 	}
-	if err := app.run(context.Background(), []string{"done"}); err != nil {
+	if err := app.run(context.Background(), []string{"--text", "done"}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -72,21 +72,25 @@ func TestRunAllowsChannelUsername(t *testing.T) {
 func TestRunValidation(t *testing.T) {
 	tests := []struct {
 		name string
-		env  map[string]string
 		args []string
 		want string
 	}{
-		{name: "missing token", env: map[string]string{}, args: []string{"done"}, want: "TG_BOT_TOKEN is not set"},
-		{name: "missing message", env: map[string]string{botTokenEnv: "secret"}, want: "message is required"},
-		{name: "missing chat", env: map[string]string{botTokenEnv: "secret"}, args: []string{"done"}, want: "run telegram-notify --learn"},
-		{name: "zero chat", env: map[string]string{botTokenEnv: "secret", chatIDEnv: "0"}, args: []string{"done"}, want: "must not be zero"},
-		{name: "invalid chat", env: map[string]string{botTokenEnv: "secret", chatIDEnv: "somewhere"}, args: []string{"done"}, want: "integer or an @channel username"},
-		{name: "learn arguments", env: map[string]string{botTokenEnv: "secret"}, args: []string{"--learn", "extra"}, want: "does not accept arguments"},
+		{name: "legacy positional send", args: []string{"done"}, want: "unexpected positional arguments"},
+		{name: "legacy prompt", args: []string{"--prompt", "question"}, want: "unexpected positional arguments"},
+		{name: "prompt without text", args: []string{"--prompt"}, want: "requires --text"},
+		{name: "button without prompt", args: []string{"--text", "question", "--button", "Yes"}, want: "requires --prompt"},
+		{name: "empty text", args: []string{"--text", ""}, want: "non-empty"},
+		{name: "learn chat override", args: []string{"--learn", "--chat-id", "42"}, want: "cannot be combined"},
+		{name: "invalid chat", args: []string{"--text", "done", "--token", "secret", "--chat-id", "somewhere"}, want: "integer or an @channel username"},
+		{name: "empty set token", args: []string{"--set-token", ""}, want: "non-empty"},
+		{name: "zero set chat", args: []string{"--set-chat-id", "0"}, want: "must not be zero"},
+		{name: "set with send", args: []string{"--set-token", "secret", "--text", "done"}, want: "cannot be combined"},
+		{name: "set with override", args: []string{"--set-chat-id", "42", "--token", "secret"}, want: "cannot be combined"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			app := testApplication(tt.env)
+			app := testApplication(nil)
 			err := app.run(context.Background(), tt.args)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("got %v, want error containing %q", err, tt.want)
@@ -102,6 +106,12 @@ func TestRunLearnSavesChatAndConfirms(t *testing.T) {
 	app := testApplication(map[string]string{botTokenEnv: "secret"})
 	app.now = func() time.Time { return startedAt }
 	app.configPath = func() (string, error) { return path, nil }
+	app.validateToken = func(_ context.Context, token string) (string, error) {
+		if token != "secret" {
+			t.Fatalf("unexpected token %q", token)
+		}
+		return "learnbot", nil
+	}
 	app.learn = func(_ context.Context, token string, gotStartedAt time.Time) (int64, error) {
 		if token != "secret" || !gotStartedAt.Equal(startedAt) {
 			t.Fatal("unexpected learn arguments")
@@ -120,10 +130,10 @@ func TestRunLearnSavesChatAndConfirms(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ChatID != 789 {
-		t.Fatalf("got saved chat ID %d", cfg.ChatID)
+	if cfg.ChatID == nil || cfg.ChatID.value != int64(789) {
+		t.Fatalf("got saved chat ID %#v", cfg.ChatID)
 	}
-	wantSent := []any{"secret", int64(789), "Telegram notifier connected."}
+	wantSent := []any{"secret", int64(789), testMessageText}
 	if !reflect.DeepEqual(sent, wantSent) {
 		t.Fatalf("got send %#v, want %#v", sent, wantSent)
 	}
@@ -133,6 +143,199 @@ func TestRunLearnSavesChatAndConfirms(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("got config permissions %o", info.Mode().Perm())
+	}
+}
+
+func TestSendNotConfiguredReportsMissing(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+		args []string
+		want string
+	}{
+		{
+			name: "nothing set",
+			args: []string{"--text", "hi"},
+			want: "not configured: missing bot token and chat ID",
+		},
+		{
+			name: "token only",
+			env:  map[string]string{botTokenEnv: "secret"},
+			args: []string{"--text", "hi"},
+			want: "not configured: missing chat ID",
+		},
+		{
+			name: "chat only",
+			env:  map[string]string{chatIDEnv: "42"},
+			args: []string{"--text", "hi", "--prompt"},
+			want: "not configured: missing bot token",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout strings.Builder
+			app := testApplication(tt.env)
+			app.stdout = &stdout
+
+			err := app.run(context.Background(), tt.args)
+			var silent silentExitError
+			if !errors.As(err, &silent) || silent.code != 1 {
+				t.Fatalf("got %v, want silent exit 1", err)
+			}
+			if !strings.Contains(stdout.String(), tt.want) {
+				t.Fatalf("stdout %q, want %q", stdout.String(), tt.want)
+			}
+		})
+	}
+}
+
+func TestLearnNotConfiguredReportsMissingToken(t *testing.T) {
+	var stdout strings.Builder
+	app := testApplication(map[string]string{chatIDEnv: "42"})
+	app.stdout = &stdout
+
+	err := app.run(context.Background(), []string{"--learn"})
+	var silent silentExitError
+	if !errors.As(err, &silent) || silent.code != 1 {
+		t.Fatalf("got %v, want silent exit 1", err)
+	}
+	if !strings.Contains(stdout.String(), "not configured: missing bot token") {
+		t.Fatalf("stdout %q", stdout.String())
+	}
+}
+
+func TestSettingsPrecedence(t *testing.T) {
+	app := testApplication(map[string]string{botTokenEnv: "env-token", chatIDEnv: "11"})
+	cfg := config{BotToken: "config-token", ChatID: &chatTarget{value: int64(22)}}
+
+	resolved, err := app.resolveSettings(cfg, cliOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.token != "config-token" || resolved.chatID.value != int64(22) {
+		t.Fatalf("config did not override environment: %#v", resolved)
+	}
+
+	opts, err := parseCLI([]string{"--token", "cli-token", "--chat-id", "33"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err = app.resolveSettings(cfg, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.token != "cli-token" || resolved.chatID.value != int64(33) {
+		t.Fatalf("CLI did not override config: %#v", resolved)
+	}
+}
+
+func TestSetFlagsUpdateConfigWithoutNetwork(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := saveConfig(path, config{BotToken: "old-token", ChatID: &chatTarget{value: int64(1)}}); err != nil {
+		t.Fatal(err)
+	}
+	app := testApplication(nil)
+	app.configPath = func() (string, error) { return path, nil }
+
+	if err := app.run(context.Background(), []string{"--set-token", "new-token"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BotToken != "new-token" || cfg.ChatID == nil || cfg.ChatID.value != int64(1) {
+		t.Fatalf("config after token update %#v", cfg)
+	}
+
+	if err := app.run(context.Background(), []string{"--set-token", "final-token", "--set-chat-id", "@alerts"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BotToken != "final-token" || cfg.ChatID == nil || cfg.ChatID.value != "@alerts" {
+		t.Fatalf("config after combined update %#v", cfg)
+	}
+}
+
+func TestInvalidSetDoesNotChangeConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := saveConfig(path, config{BotToken: "old-token", ChatID: &chatTarget{value: int64(1)}}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := testApplication(nil)
+	app.configPath = func() (string, error) { return path, nil }
+	if err := app.run(context.Background(), []string{"--set-token", "new-token", "--set-chat-id", "bad"}); err == nil {
+		t.Fatal("expected invalid chat ID")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("config changed: before=%q after=%q", before, after)
+	}
+}
+
+func TestConfiguredRunWithoutActionShowsHelp(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := saveConfig(path, config{BotToken: "token", ChatID: &chatTarget{value: int64(1)}}); err != nil {
+		t.Fatal(err)
+	}
+	var stdout strings.Builder
+	app := testApplication(nil)
+	app.stdout = &stdout
+	app.configPath = func() (string, error) { return path, nil }
+	if err := app.run(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "Usage:") || !strings.Contains(stdout.String(), "--set-token") {
+		t.Fatalf("help output %q", stdout.String())
+	}
+}
+
+func TestHelpDoesNotReadConfig(t *testing.T) {
+	var stdout strings.Builder
+	app := testApplication(nil)
+	app.stdout = &stdout
+	app.configPath = func() (string, error) { return "", errors.New("should not read config") }
+	if err := app.run(context.Background(), []string{"--help"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "Usage:") {
+		t.Fatalf("help output %q", stdout.String())
+	}
+}
+
+func TestLoadLegacyAndUsernameConfig(t *testing.T) {
+	legacyPath := filepath.Join(t.TempDir(), "legacy.json")
+	if err := os.WriteFile(legacyPath, []byte("{\"chat_id\":123}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := loadConfig(legacyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.BotToken != "" || legacy.ChatID == nil || legacy.ChatID.value != int64(123) {
+		t.Fatalf("legacy config %#v", legacy)
+	}
+
+	usernamePath := filepath.Join(t.TempDir(), "username.json")
+	if err := saveConfig(usernamePath, config{ChatID: &chatTarget{value: "@alerts"}}); err != nil {
+		t.Fatal(err)
+	}
+	username, err := loadConfig(usernamePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if username.ChatID == nil || username.ChatID.value != "@alerts" {
+		t.Fatalf("username config %#v", username)
 	}
 }
 
@@ -170,12 +373,21 @@ func TestRedact(t *testing.T) {
 }
 
 func testApplication(env map[string]string) application {
+	redactions := []string{env[botTokenEnv]}
 	return application{
 		getenv: func(key string) string { return env[key] },
 		stdout: io.Discard,
+		stderr: io.Discard,
 		now:    time.Now,
 		configPath: func() (string, error) {
 			return filepath.Join(os.TempDir(), "missing-telegram-notify-config"), nil
+		},
+		validateToken: func(context.Context, string) (string, error) {
+			return "testbot", nil
+		},
+		checkAPI: func(context.Context) error { return nil },
+		lookPath: func(string) (string, error) {
+			return "/usr/local/bin/telegram-notify", nil
 		},
 		learn: func(context.Context, string, time.Time) (int64, error) {
 			return 0, errors.New("unexpected learn")
@@ -204,20 +416,21 @@ func testApplication(env map[string]string) application {
 		react: func(context.Context, string, int64, int, string) error {
 			return errors.New("unexpected react")
 		},
+		redactions: &redactions,
 	}
 }
 
-func TestParsePromptArgs(t *testing.T) {
-	q, buttons, err := parsePromptArgs([]string{"Proceed?", "--button", "Yes", "--button", "No"})
+func TestParseCLI(t *testing.T) {
+	opts, err := parseCLI([]string{"--text", "Proceed?", "--prompt", "--button", "Yes", "--button", "No"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if q != "Proceed?" || !reflect.DeepEqual(buttons, []string{"Yes", "No"}) {
-		t.Fatalf("got q=%q buttons=%v", q, buttons)
+	if opts.text.value != "Proceed?" || !opts.prompt || !reflect.DeepEqual([]string(opts.buttons), []string{"Yes", "No"}) {
+		t.Fatalf("got text=%q prompt=%v buttons=%v", opts.text.value, opts.prompt, opts.buttons)
 	}
 
-	_, _, err = parsePromptArgs([]string{"hello", "--button"})
-	if err == nil || !strings.Contains(err.Error(), "requires a label") {
+	_, err = parseCLI([]string{"--text", "hello", "--button"})
+	if err == nil || !strings.Contains(err.Error(), "needs an argument") {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -249,7 +462,7 @@ func TestRunPromptSendsQuestionAndReturnsReply(t *testing.T) {
 		return nil
 	}
 
-	if err := app.run(context.Background(), []string{"--prompt", "pick", "one"}); err != nil {
+	if err := app.run(context.Background(), []string{"--text", "pick one", "--prompt"}); err != nil {
 		t.Fatal(err)
 	}
 	if promptQuestion != "pick one" || len(promptButtons) != 0 {
@@ -300,7 +513,7 @@ func TestRunPromptWithButtonTap(t *testing.T) {
 		return nil
 	}
 
-	err := app.run(context.Background(), []string{"--prompt", "Proceed?", "--button", "Yes", "--button", "No"})
+	err := app.run(context.Background(), []string{"--text", "Proceed?", "--prompt", "--button", "Yes", "--button", "No"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +566,7 @@ func TestRunPromptTextReplyWithButtonsRemovesKeyboard(t *testing.T) {
 		return nil
 	}
 
-	if err := app.run(context.Background(), []string{"--prompt", "q", "--button", "A"}); err != nil {
+	if err := app.run(context.Background(), []string{"--text", "q", "--prompt", "--button", "A"}); err != nil {
 		t.Fatal(err)
 	}
 	if !removeCalled || callbackCalled || appendCalled {
@@ -381,7 +594,7 @@ func TestRunPromptTimesOutAndNotifiesChat(t *testing.T) {
 		return nil
 	}
 
-	err := app.run(context.Background(), []string{"--prompt", "hello?", "--button", "Yes"})
+	err := app.run(context.Background(), []string{"--text", "hello?", "--prompt", "--button", "Yes"})
 	if !errors.Is(err, errPromptTimeout) {
 		t.Fatalf("got %v", err)
 	}
@@ -403,7 +616,7 @@ func TestRunPromptTimesOutWithoutButtonsSkipsRemove(t *testing.T) {
 		return nil
 	}
 
-	err := app.run(context.Background(), []string{"--prompt", "hello?"})
+	err := app.run(context.Background(), []string{"--text", "hello?", "--prompt"})
 	if !errors.Is(err, errPromptTimeout) {
 		t.Fatalf("got %v", err)
 	}
@@ -414,7 +627,7 @@ func TestRunPromptTimesOutWithoutButtonsSkipsRemove(t *testing.T) {
 
 func TestRunPromptRequiresChat(t *testing.T) {
 	app := testApplication(map[string]string{botTokenEnv: "secret", chatIDEnv: "@alerts"})
-	err := app.run(context.Background(), []string{"--prompt", "hello?"})
+	err := app.run(context.Background(), []string{"--text", "hello?", "--prompt"})
 	if err == nil || !strings.Contains(err.Error(), "private/group chat") {
 		t.Fatalf("got %v", err)
 	}
@@ -423,7 +636,7 @@ func TestRunPromptRequiresChat(t *testing.T) {
 func TestRunPromptRequiresQuestion(t *testing.T) {
 	app := testApplication(map[string]string{botTokenEnv: "secret", chatIDEnv: "42"})
 	err := app.run(context.Background(), []string{"--prompt"})
-	if err == nil || !strings.Contains(err.Error(), "question is required") {
+	if err == nil || !strings.Contains(err.Error(), "requires --text") {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -440,7 +653,7 @@ func TestRunPromptReactFailureStillReturnsReply(t *testing.T) {
 		return errors.New("reaction failed")
 	}
 
-	if err := app.run(context.Background(), []string{"--prompt", "q"}); err != nil {
+	if err := app.run(context.Background(), []string{"--text", "q", "--prompt"}); err != nil {
 		t.Fatal(err)
 	}
 	if stdout.String() != "ok\n" {
