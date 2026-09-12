@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 )
 
@@ -108,11 +106,11 @@ func TestRunLearnSavesChatAndConfirms(t *testing.T) {
 	app := testApplication(map[string]string{botTokenEnv: "secret"})
 	app.now = func() time.Time { return startedAt }
 	app.configPath = func() (string, error) { return path, nil }
-	app.validateToken = func(_ context.Context, token string) error {
+	app.validateToken = func(_ context.Context, token string) (string, error) {
 		if token != "secret" {
 			t.Fatalf("unexpected token %q", token)
 		}
-		return nil
+		return "learnbot", nil
 	}
 	app.learn = func(_ context.Context, token string, gotStartedAt time.Time) (int64, error) {
 		if token != "secret" || !gotStartedAt.Equal(startedAt) {
@@ -135,7 +133,7 @@ func TestRunLearnSavesChatAndConfirms(t *testing.T) {
 	if cfg.ChatID == nil || cfg.ChatID.value != int64(789) {
 		t.Fatalf("got saved chat ID %#v", cfg.ChatID)
 	}
-	wantSent := []any{"secret", int64(789), "Telegram notifier connected."}
+	wantSent := []any{"secret", int64(789), testMessageText}
 	if !reflect.DeepEqual(sent, wantSent) {
 		t.Fatalf("got send %#v, want %#v", sent, wantSent)
 	}
@@ -148,181 +146,61 @@ func TestRunLearnSavesChatAndConfirms(t *testing.T) {
 	}
 }
 
-func TestFirstRunWizardRetriesTokenAndConnects(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
+func TestSendNotConfiguredReportsMissing(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+		args []string
+		want string
+	}{
+		{
+			name: "nothing set",
+			args: []string{"--text", "hi"},
+			want: "not configured: missing bot token and chat ID",
+		},
+		{
+			name: "token only",
+			env:  map[string]string{botTokenEnv: "secret"},
+			args: []string{"--text", "hi"},
+			want: "not configured: missing chat ID",
+		},
+		{
+			name: "chat only",
+			env:  map[string]string{chatIDEnv: "42"},
+			args: []string{"--text", "hi", "--prompt"},
+			want: "not configured: missing bot token",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout strings.Builder
+			app := testApplication(tt.env)
+			app.stdout = &stdout
+
+			err := app.run(context.Background(), tt.args)
+			var silent silentExitError
+			if !errors.As(err, &silent) || silent.code != 1 {
+				t.Fatalf("got %v, want silent exit 1", err)
+			}
+			if !strings.Contains(stdout.String(), tt.want) {
+				t.Fatalf("stdout %q, want %q", stdout.String(), tt.want)
+			}
+		})
+	}
+}
+
+func TestLearnNotConfiguredReportsMissingToken(t *testing.T) {
 	var stdout strings.Builder
-	var inputs = []string{"bad-token", "good-token"}
-	var validated []string
-	var sent []any
-	app := testApplication(nil)
+	app := testApplication(map[string]string{chatIDEnv: "42"})
 	app.stdout = &stdout
-	app.configPath = func() (string, error) { return path, nil }
-	app.readToken = func(io.Writer) (string, error) {
-		value := inputs[0]
-		inputs = inputs[1:]
-		return value, nil
-	}
-	app.validateToken = func(_ context.Context, token string) error {
-		validated = append(validated, token)
-		if token == "bad-token" {
-			return fmt.Errorf("%w: Telegram rejected bad-token", bot.ErrorUnauthorized)
-		}
-		return nil
-	}
-	app.learn = func(context.Context, string, time.Time) (int64, error) { return 77, nil }
-	app.send = func(_ context.Context, token string, chatID any, message string) error {
-		sent = []any{token, chatID, message}
-		return nil
-	}
 
-	if err := app.run(context.Background(), nil); err != nil {
-		t.Fatal(err)
+	err := app.run(context.Background(), []string{"--learn"})
+	var silent silentExitError
+	if !errors.As(err, &silent) || silent.code != 1 {
+		t.Fatalf("got %v, want silent exit 1", err)
 	}
-	if !reflect.DeepEqual(validated, []string{"bad-token", "good-token"}) {
-		t.Fatalf("validated %v", validated)
-	}
-	if strings.Contains(stdout.String(), "bad-token") || !strings.Contains(stdout.String(), "[REDACTED]") {
-		t.Fatalf("token was not redacted from output: %q", stdout.String())
-	}
-	cfg, err := loadConfig(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.BotToken != "good-token" || cfg.ChatID == nil || cfg.ChatID.value != int64(77) {
-		t.Fatalf("saved config %#v", cfg)
-	}
-	wantSent := []any{"good-token", int64(77), "Telegram notifier connected."}
-	if !reflect.DeepEqual(sent, wantSent) {
-		t.Fatalf("sent %#v", sent)
-	}
-}
-
-func TestWizardWithSavedTokenLearnsMissingChat(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	if err := saveConfig(path, config{BotToken: "saved-token"}); err != nil {
-		t.Fatal(err)
-	}
-	validated := false
-	app := testApplication(nil)
-	app.configPath = func() (string, error) { return path, nil }
-	app.validateToken = func(_ context.Context, token string) error {
-		validated = token == "saved-token"
-		return nil
-	}
-	app.learn = func(context.Context, string, time.Time) (int64, error) { return 88, nil }
-	app.send = func(context.Context, string, any, string) error { return nil }
-
-	if err := app.run(context.Background(), nil); err != nil {
-		t.Fatal(err)
-	}
-	if !validated {
-		t.Fatal("saved token was not validated")
-	}
-	cfg, err := loadConfig(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.BotToken != "saved-token" || cfg.ChatID == nil || cfg.ChatID.value != int64(88) {
-		t.Fatalf("saved config %#v", cfg)
-	}
-}
-
-func TestWizardDoesNotPersistEnvironmentToken(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	app := testApplication(map[string]string{botTokenEnv: "env-token"})
-	app.configPath = func() (string, error) { return path, nil }
-	app.validateToken = func(context.Context, string) error { return nil }
-	app.learn = func(context.Context, string, time.Time) (int64, error) { return 89, nil }
-	app.send = func(context.Context, string, any, string) error { return nil }
-
-	if err := app.run(context.Background(), nil); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := loadConfig(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.BotToken != "" || cfg.ChatID == nil || cfg.ChatID.value != int64(89) {
-		t.Fatalf("saved config %#v", cfg)
-	}
-}
-
-func TestWizardKeepsValidatedTokenWhenLearningFails(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	app := testApplication(nil)
-	app.configPath = func() (string, error) { return path, nil }
-	app.readToken = func(io.Writer) (string, error) { return "good-token", nil }
-	app.validateToken = func(context.Context, string) error { return nil }
-	app.learn = func(context.Context, string, time.Time) (int64, error) {
-		return 0, context.Canceled
-	}
-
-	err := app.run(context.Background(), nil)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("got %v", err)
-	}
-	cfg, loadErr := loadConfig(path)
-	if loadErr != nil {
-		t.Fatal(loadErr)
-	}
-	if cfg.BotToken != "good-token" || cfg.ChatID != nil {
-		t.Fatalf("saved config %#v", cfg)
-	}
-}
-
-func TestWizardWithSavedChatReadsMissingToken(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	if err := saveConfig(path, config{ChatID: &chatTarget{value: int64(99)}}); err != nil {
-		t.Fatal(err)
-	}
-	app := testApplication(nil)
-	app.configPath = func() (string, error) { return path, nil }
-	app.readToken = func(io.Writer) (string, error) { return "entered-token", nil }
-	app.validateToken = func(_ context.Context, token string) error {
-		if token != "entered-token" {
-			t.Fatalf("validated %q", token)
-		}
-		return nil
-	}
-	app.send = func(_ context.Context, token string, chatID any, _ string) error {
-		if token != "entered-token" || chatID != int64(99) {
-			t.Fatalf("token=%q chat=%v", token, chatID)
-		}
-		return nil
-	}
-
-	if err := app.run(context.Background(), nil); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := loadConfig(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.BotToken != "entered-token" || cfg.ChatID == nil || cfg.ChatID.value != int64(99) {
-		t.Fatalf("saved config %#v", cfg)
-	}
-}
-
-func TestWizardPropagatesTokenInputCancellation(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	app := testApplication(nil)
-	app.configPath = func() (string, error) { return path, nil }
-	app.readToken = func(io.Writer) (string, error) { return "", context.Canceled }
-	if err := app.run(context.Background(), nil); !errors.Is(err, context.Canceled) {
-		t.Fatalf("got %v", err)
-	}
-}
-
-func TestReadTokenRejectsNonTerminal(t *testing.T) {
-	read, write, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer read.Close()
-	defer write.Close()
-	_, err = readTokenFromFD(int(read.Fd()), io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "non-terminal stdin") {
-		t.Fatalf("got %v", err)
+	if !strings.Contains(stdout.String(), "not configured: missing bot token") {
+		t.Fatalf("stdout %q", stdout.String())
 	}
 }
 
@@ -504,11 +382,12 @@ func testApplication(env map[string]string) application {
 		configPath: func() (string, error) {
 			return filepath.Join(os.TempDir(), "missing-telegram-notify-config"), nil
 		},
-		readToken: func(io.Writer) (string, error) {
-			return "", errors.New("unexpected readToken")
+		validateToken: func(context.Context, string) (string, error) {
+			return "testbot", nil
 		},
-		validateToken: func(context.Context, string) error {
-			return nil
+		checkAPI: func(context.Context) error { return nil },
+		lookPath: func(string) (string, error) {
+			return "/usr/local/bin/telegram-notify", nil
 		},
 		learn: func(context.Context, string, time.Time) (int64, error) {
 			return 0, errors.New("unexpected learn")

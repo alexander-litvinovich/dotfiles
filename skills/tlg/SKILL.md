@@ -36,6 +36,27 @@ telegram-notify --text "your message here"
 Run `telegram-notify` without arguments for first-time setup. Full setup and
 override instructions: [cmd/telegram-notify/README.md](../../cmd/telegram-notify/README.md).
 
+## First-time setup
+
+No preflight check: just attempt the send. When the util is not configured,
+any send or `--learn` exits 1 and prints one line to stdout:
+
+```
+not configured: missing bot token
+not configured: missing chat ID
+not configured: missing bot token and chat ID
+```
+
+Nudge the user based on what is missing:
+
+- **chat ID only** — run `telegram-notify --learn` and ask the user to send `/start` to the bot from their Telegram app. The command blocks until the message arrives (Ctrl+C stops it), then saves the chat ID and sends a test message.
+- **bot token only** — ask the user for the bot's API token (they create a bot via @BotFather), run `telegram-notify --set-token TOKEN`, then `--learn` if the chat ID is also missing.
+- **both** — offer two paths: the user runs `telegram-notify` in a terminal and goes through the interactive chat wizard (preferred), or hands you the token for `--set-token` + `--learn` as above.
+
+Ask for the token only in a private chat with the user; it grants full
+control of the bot. Tokens passed via `--token` or `TG_BOT_TOKEN` apply to
+one invocation only and are never saved.
+
 ## Asking the user a question
 
 When you need an answer from the user (not a one-way ping), block on:

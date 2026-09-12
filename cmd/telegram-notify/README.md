@@ -10,20 +10,37 @@ Create a bot through [@BotFather](https://t.me/BotFather) with `/newbot`, then r
 telegram-notify
 ```
 
-The setup wizard asks for the bot token without displaying it, verifies the
-token, and saves it. It then asks you to send `/start` to the bot in a private
-chat. After receiving `/start`, it saves the chat ID and sends a confirmation.
+The setup wizard is a chat with the tool itself. It greets you with the current
+version, asks you to paste the bot token (masked as bullets, never echoed),
+and checks it against Telegram. It then shows the bot's username, asks you to
+send `/start` to the bot in a private chat, and waits five minutes. When
+`/start` arrives, it saves the settings, sends a test message to your chat,
+and prints the commands you can use. If `/start` doesn't arrive in time, press
+Enter to wait another five minutes or Ctrl+C to give up (exit code 130).
+
+The finished transcript stays in your terminal history, and Ctrl+C works at
+any step. If the Telegram API is unreachable, the wizard shows the CLI
+commands for setting the token and chat ID directly instead.
 
 The config lives at `$XDG_CONFIG_HOME/telegram-notify/config.json`, or
 `~/.config/telegram-notify/config.json` when `XDG_CONFIG_HOME` is unset. The
-file is readable only by its owner.
+file is readable only by its owner and also stores the bot's username.
 
 If either setting is missing, running `telegram-notify` resumes setup and asks
-only for the missing value. Once setup is complete, running the command without
-arguments shows help.
+only for the missing value. A token from `TG_BOT_TOKEN` or `--token` is used
+for the session but never written to the config. Once setup is complete,
+running the command without arguments shows help.
+
+If `telegram-notify` is not on your `PATH`, the wizard shows an export line
+for zsh, bash, or fish. It never edits shell files.
 
 The wizard needs an interactive terminal to read a missing token. For scripts,
 provide `TG_BOT_TOKEN`, `--token`, or save it first with `--set-token`.
+
+Commands that need settings (`--text`, `--prompt`, `--learn`) print
+`not configured: missing <what>` to stdout and exit 1 when a required value
+is unavailable from flags, environment, or saved config. Scripts and agents
+can react to that line instead of parsing stderr.
 
 ## Send a message
 

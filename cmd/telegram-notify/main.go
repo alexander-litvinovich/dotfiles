@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -17,9 +18,9 @@ import (
 	"syscall"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
-	"golang.org/x/term"
 )
 
 const (
@@ -28,6 +29,7 @@ const (
 	configDirName    = "telegram-notify"
 	configName       = "config.json"
 	requestTimeout   = 10 * time.Second
+	probeTimeout     = 5 * time.Second
 	pollTimeout      = 30 * time.Second
 	promptTimeout    = 5 * time.Minute
 	checkinLeadTime  = 30 * time.Second
@@ -47,8 +49,9 @@ var (
 )
 
 type config struct {
-	BotToken string      `json:"bot_token,omitempty"`
-	ChatID   *chatTarget `json:"chat_id,omitempty"`
+	BotToken    string      `json:"bot_token,omitempty"`
+	ChatID      *chatTarget `json:"chat_id,omitempty"`
+	BotUsername string      `json:"bot_username,omitempty"`
 }
 
 type chatTarget struct {
@@ -132,8 +135,9 @@ type application struct {
 	stderr         io.Writer
 	now            func() time.Time
 	configPath     func() (string, error)
-	readToken      func(io.Writer) (string, error)
-	validateToken  func(context.Context, string) error
+	validateToken  func(context.Context, string) (string, error)
+	checkAPI       func(context.Context) error
+	lookPath       func(string) (string, error)
 	learn          func(context.Context, string, time.Time) (int64, error)
 	send           func(context.Context, string, any, string) error
 	sendTracked    func(context.Context, string, any, string) (int, error)
@@ -157,8 +161,9 @@ func main() {
 		stderr:         os.Stderr,
 		now:            time.Now,
 		configPath:     defaultConfigPath,
-		readToken:      readTokenFromTerminal,
 		validateToken:  validateBotToken,
+		checkAPI:       checkTelegramAPI,
+		lookPath:       exec.LookPath,
 		learn:          learnChat,
 		send:           sendMessage,
 		sendTracked:    sendMessageTracked,
@@ -172,6 +177,10 @@ func main() {
 	}
 
 	if err := app.run(ctx, os.Args[1:]); err != nil {
+		var silent silentExitError
+		if errors.As(err, &silent) {
+			os.Exit(silent.code)
+		}
 		fmt.Fprintf(os.Stderr, "telegram-notify: %s\n", redactAll(err.Error(), redactions))
 		os.Exit(1)
 	}
@@ -210,14 +219,14 @@ func (app application) run(ctx context.Context, args []string) error {
 
 	if opts.learn {
 		if resolved.token == "" {
-			return errors.New("bot token is not configured; run telegram-notify without arguments or use --token")
+			return app.notConfigured("bot token")
 		}
 		return app.runLearn(ctx, path, cfg, resolved.token)
 	}
 
 	if opts.text.set {
-		if resolved.token == "" || resolved.chatID == nil {
-			return errors.New("telegram-notify is not configured; run it without arguments to start setup")
+		if missing := missingSettings(resolved); len(missing) > 0 {
+			return app.notConfigured(missing...)
 		}
 		if opts.prompt {
 			return app.runPrompt(ctx, resolved.token, resolved.chatID.value, opts.text.value, opts.buttons)
@@ -354,6 +363,25 @@ func (app application) resolveSettings(cfg config, opts cliOptions) (settings, e
 	return settings{token: token, chatID: chatID}, nil
 }
 
+func missingSettings(resolved settings) []string {
+	var missing []string
+	if resolved.token == "" {
+		missing = append(missing, "bot token")
+	}
+	if resolved.chatID == nil {
+		missing = append(missing, "chat ID")
+	}
+	return missing
+}
+
+// notConfigured prints what the command was missing to stdout and returns a
+// silent exit so the message is not duplicated on stderr. Scripts and agents
+// parse this line to decide how to finish setup.
+func (app application) notConfigured(missing ...string) error {
+	fmt.Fprintf(app.stdout, "not configured: missing %s\n", strings.Join(missing, " and "))
+	return silentExitError{code: 1}
+}
+
 func parseChatTarget(value, source string) (*chatTarget, error) {
 	value = strings.TrimSpace(value)
 	if id, err := strconv.ParseInt(value, 10, 64); err == nil {
@@ -393,63 +421,22 @@ func (app application) runSet(path string, cfg config, opts cliOptions) error {
 }
 
 func (app application) runSetup(ctx context.Context, path string, cfg config, resolved settings) error {
-	token := resolved.token
-	tokenValidated := false
-	if token == "" {
-		for {
-			entered, err := app.readToken(app.stdout)
-			if err != nil {
-				return err
-			}
-			token = strings.TrimSpace(entered)
-			app.rememberSecret(token)
-			if token == "" {
-				fmt.Fprintln(app.stdout, "Bot token cannot be empty.")
-				continue
-			}
-			if err := app.validateToken(ctx, token); err != nil {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				if !isInvalidBotToken(err) {
-					return fmt.Errorf("validate bot token: %w", err)
-				}
-				fmt.Fprintf(app.stdout, "Bot token is invalid: %s\n", app.redact(err.Error()))
-				continue
-			}
-			tokenValidated = true
-			cfg.BotToken = token
-			if err := saveConfig(path, cfg); err != nil {
-				return fmt.Errorf("save bot token: %w", err)
-			}
-			break
+	program := tea.NewProgram(newWizard(app, ctx, path, cfg, resolved), tea.WithContext(ctx), tea.WithOutput(app.stdout))
+	final, err := program.Run()
+	if err != nil {
+		if errors.Is(err, tea.ErrProgramKilled) || ctx.Err() != nil {
+			return silentExitError{code: 130}
 		}
+		return fmt.Errorf("run setup: %w", err)
 	}
-
-	chatID := resolved.chatID
-	if chatID == nil {
-		if !tokenValidated {
-			if err := app.validateToken(ctx, token); err != nil {
-				return fmt.Errorf("validate bot token: %w", err)
-			}
-		}
-		fmt.Fprintln(app.stdout, "Send /start to the bot in a private chat. Waiting...")
-		learnedID, err := app.learn(ctx, token, app.now())
-		if err != nil {
-			return fmt.Errorf("learn chat ID: %w", err)
-		}
-		chatID = &chatTarget{value: learnedID}
-		cfg.ChatID = chatID
-		if err := saveConfig(path, cfg); err != nil {
-			return fmt.Errorf("save chat ID: %w", err)
-		}
+	if w, ok := final.(wizard); ok && w.exit != 0 {
+		return silentExitError{code: w.exit}
 	}
-
-	return app.confirmConnection(ctx, token, chatID)
+	return nil
 }
 
 func (app application) runLearn(ctx context.Context, path string, cfg config, token string) error {
-	if err := app.validateToken(ctx, token); err != nil {
+	if _, err := app.validateToken(ctx, token); err != nil {
 		return fmt.Errorf("validate bot token: %w", err)
 	}
 	fmt.Fprintln(app.stdout, "Send /start to the bot in a private chat. Waiting...")
@@ -467,7 +454,7 @@ func (app application) runLearn(ctx context.Context, path string, cfg config, to
 }
 
 func (app application) confirmConnection(ctx context.Context, token string, chatID *chatTarget) error {
-	if err := app.send(ctx, token, chatID.value, "Telegram notifier connected."); err != nil {
+	if err := app.send(ctx, token, chatID.value, testMessageText); err != nil {
 		return fmt.Errorf("chat ID was saved, but confirmation failed: %w", err)
 	}
 	fmt.Fprintf(app.stdout, "Connected to chat %v.\n", chatID.value)
@@ -589,35 +576,34 @@ func saveConfig(path string, cfg config) error {
 	return os.Rename(tmpName, path)
 }
 
-func readTokenFromTerminal(out io.Writer) (string, error) {
-	return readTokenFromFD(int(os.Stdin.Fd()), out)
-}
-
-func readTokenFromFD(fd int, out io.Writer) (string, error) {
-	if !term.IsTerminal(fd) {
-		return "", errors.New("cannot read a bot token from non-terminal stdin; use --token, --set-token, or TG_BOT_TOKEN")
-	}
-	fmt.Fprint(out, "Bot token: ")
-	value, err := term.ReadPassword(fd)
-	fmt.Fprintln(out)
-	if err != nil {
-		return "", fmt.Errorf("read bot token: %w", err)
-	}
-	return string(value), nil
-}
-
-func validateBotToken(ctx context.Context, token string) error {
+func validateBotToken(ctx context.Context, token string) (string, error) {
 	client, err := bot.New(
 		token,
 		bot.WithSkipGetMe(),
 		bot.WithHTTPClient(requestTimeout, &http.Client{Timeout: requestTimeout}),
 	)
 	if err != nil {
-		return err
+		return "", err
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
-	_, err = client.GetMe(requestCtx)
+	user, err := client.GetMe(requestCtx)
+	if err != nil {
+		return "", err
+	}
+	return user.Username, nil
+}
+
+// checkTelegramAPI reports whether the Telegram API host is reachable. Any
+// HTTP response counts as reachable; only transport errors mean offline.
+func checkTelegramAPI(ctx context.Context) error {
+	requestCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, "https://api.telegram.org", nil)
+	if err != nil {
+		return err
+	}
+	_, err = http.DefaultClient.Do(req)
 	return err
 }
 
