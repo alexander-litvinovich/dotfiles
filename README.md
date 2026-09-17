@@ -171,10 +171,15 @@ links it to `~/.codex/AGENTS.md` and `~/.claude/AGENTS.md`. Claude Code loads
 the same file through an `@AGENTS.md` import managed in
 `~/.claude/CLAUDE.md`.
 
-Cursor User Rules are account settings, not files. To apply the same
-instructions in Cursor, copy the relevant text from `agents/AGENTS.md` to
-**Cursor Settings → Rules → User Rules**. Prompt instructions guide model
-behavior but do not guarantee output formatting.
+Cursor does not load a global `~/.cursor/AGENTS.md`. Instead,
+`link_agents.sh` registers a `sessionStart` hook in `~/.cursor/hooks.json`.
+The hook runs [`agents/hooks/inject-agents-md.sh`](agents/hooks/inject-agents-md.sh)
+and adds this repository's `AGENTS.md` to the initial conversation context.
+It runs once when a conversation starts, so edits apply to new conversations.
+Cursor does not wait for the hook, so treat it as best-effort guidance.
+
+The `@RTK.md` import is omitted from Cursor's injected context. `RTK.md` is a
+machine-local file created by `rtk init --agent cursor`, not a dotfiles file.
 
 ### `skills/`
 
@@ -288,8 +293,9 @@ cask 'application-name'    # for GUI applications
 ### Adding global agent instructions
 
 1. Edit `agents/AGENTS.md`
-2. Run `./link_agents.sh` to create or refresh agent links
-3. Copy any always-on instructions to Cursor User Rules
+2. Run `./link_agents.sh` to refresh Codex and Claude links and Cursor's
+   `sessionStart` hook
+3. Start a new Cursor conversation to pick up the changes
 
 ### Modifying System Preferences
 

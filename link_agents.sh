@@ -115,6 +115,57 @@ update_claude_md() {
     echo -e "${GREEN}Updated ${CLAUDE_MD}${NC}"
 }
 
+update_cursor_hooks() {
+    local cursor_dir="${HOME}/.cursor"
+    local hooks_file="${cursor_dir}/hooks.json"
+    local hook_command="${SCRIPT_DIR}/agents/hooks/inject-agents-md.sh"
+    local legacy_hook_command="${cursor_dir}/hooks/inject-agents-md.sh"
+    local updated_file
+
+    if [ ! -d "${cursor_dir}" ]; then
+        return
+    fi
+
+    updated_file=$(mktemp)
+    if [ -f "${hooks_file}" ]; then
+        jq --arg command "${hook_command}" \
+            --arg legacy_command "${legacy_hook_command}" '
+            . as $original |
+            (
+                $original.hooks.sessionStart // [] |
+                map(
+                    if .command == "./hooks/inject-agents-md.sh" or
+                       .command == $legacy_command or
+                       .command == $command
+                    then .command = $command
+                    else .
+                    end
+                ) |
+                if any(.command == $command) then . else . + [{"command": $command}] end
+            ) as $session_start |
+            $original |
+            .version //= 1 |
+            .hooks //= {} |
+            .hooks.sessionStart = $session_start
+            ' "${hooks_file}" > "${updated_file}"
+    else
+        jq -n --arg command "${hook_command}" \
+            '{version: 1, hooks: {sessionStart: [{command: $command}]}}' \
+            > "${updated_file}"
+    fi
+
+    if cmp -s "${hooks_file}" "${updated_file}"; then
+        echo -e "${GREEN}Cursor hooks already up to date${NC}"
+    else
+        [ -f "${hooks_file}" ] && backup_file "${hooks_file}" "cursor-hooks.json"
+        mv "${updated_file}" "${hooks_file}"
+        echo -e "${GREEN}Updated ${hooks_file}${NC}"
+        return
+    fi
+
+    rm "${updated_file}"
+}
+
 if [ ! -f "${AGENTS_FILE}" ]; then
     echo "Error: Global agent instructions not found: ${AGENTS_FILE}" >&2
     exit 1
@@ -129,6 +180,7 @@ create_symlink "${AGENTS_FILE}" "${CLAUDE_DIR}/AGENTS.md" "claude-AGENTS.md"
 temp_dir=$(mktemp -d)
 trap 'rm -rf "${temp_dir}"' EXIT
 update_claude_md "${temp_dir}"
+update_cursor_hooks
 
 if [ -d "${SKILL_DIR}" ]; then
     echo ""
