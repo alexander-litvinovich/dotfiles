@@ -8,7 +8,9 @@ description: >
   asks to notify them in Telegram, send them a message, ping in tlg, or says
   "скинуть в телегу"; when a long multi-step process completes and they
   wanted a ping at the end; or when the agent needs to ask the user something
-  and wait for their answer over Telegram instead of blocking chat.
+  and wait for their answer over Telegram instead of blocking chat; or when the
+  user asks to send a plan or proposal to Telegram for approval, in which case
+  use the interactive --prompt flow with approval buttons.
 argument-hint: "[message]"
 ---
 
@@ -76,6 +78,16 @@ answer=$(telegram-notify --text "Proceed with deploy?" --prompt --button Yes --b
 Use `--text "question" --prompt` without `--button` for a free-form answer.
 
 Use this only when you truly need their input; keep using a plain `telegram-notify` message for completion pings.
+
+### Sending a plan or proposal for approval
+
+When the user asks you to send a plan, proposal, or set of changes to Telegram for them to check or approve, you **must** use `--prompt` with explicit approval buttons — not a one-way `telegram-notify` message followed by silent waiting. This lets the user approve or reject directly from Telegram. Capture the answer and act on it: proceed on approval; incorporate the feedback or halt on rejection.
+
+```bash
+answer=$(telegram-notify --text "Plan ready: migrate auth to OAuth in 3 steps. Approve?" --prompt --button Approve --button "Request changes")
+```
+
+Summarize the plan in one short line in the `--text`; the full plan stays in chat.
 
 ## Message content
 
