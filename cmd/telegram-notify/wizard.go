@@ -387,7 +387,7 @@ func (w wizard) waitStartCmd() tea.Cmd {
 func (w wizard) finishCmd(chatID any) tea.Cmd {
 	token, app, ctx := w.token, w.app, w.ctx
 	return func() tea.Msg {
-		testErr := app.send(ctx, token, chatID, testMessageText)
+		_, testErr := app.send(ctx, token, chatID, outgoing{text: testMessageText})
 		_, err := app.lookPath(programName)
 		return setupFinishedMsg{testErr: testErr, onPath: err == nil}
 	}

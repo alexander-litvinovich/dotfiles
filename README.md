@@ -144,7 +144,8 @@ arguments. An agent can also guide setup non-interactively with
 `--set-token` and `--learn`. Unconfigured commands print
 `not configured: missing ...` to stdout and exit 1. See
 [`cmd/telegram-notify/README.md`](cmd/telegram-notify/README.md) for setup
-and usage.
+and usage. Send rendered output with `--image`, or any lossless attachment
+with `--file`.
 
 ### `configs/`
 

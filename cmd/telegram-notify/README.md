@@ -51,6 +51,28 @@ telegram-notify --text "Tests passed on $HOST"
 
 Text must be passed with `--text`. Positional messages are not supported.
 
+## Send an image or file
+
+```bash
+telegram-notify --text "Chart regenerated" --image /tmp/chart.png
+telegram-notify --image https://example.com/build.png
+telegram-notify --text "Coverage report" --file ./coverage.html
+telegram-notify --text "Report" --file - --filename report.pdf < report.pdf
+```
+
+`--image` sends an inline Telegram photo. `--file` sends a document without
+recompressing it and accepts any file type. Use `--file` for PDFs, logs,
+archives, source files, and screenshots whose text must remain sharp.
+
+Both flags accept an HTTP(S) URL, a file path, a base64 `data:` URI, raw
+base64, or `-` for stdin. Only one attachment can be sent at a time.
+`--filename` overrides the name shown in Telegram. It is mainly useful for
+stdin and base64 payloads; paths and URLs supply a name automatically.
+
+`--text` is the attachment caption and is limited to 1024 characters. If an
+`--image` upload is over 10 MB or is not an image, the command warns and sends
+it as a file instead. Uploads have a 60-second timeout.
+
 ## Ask for a reply
 
 Add `--prompt` to send a question and wait for the answer:
@@ -72,6 +94,13 @@ answer=$(telegram-notify --text "Proceed with deploy?" --prompt \
 A button tap removes the buttons, appends `Answer: <label>` to the question,
 reacts with 👍, and prints the label on stdout. A text reply still works when
 buttons are present.
+
+An image or file can carry the question. Button answers update its caption:
+
+```bash
+answer=$(telegram-notify --text "Does this look right?" --image /tmp/preview.png \
+  --prompt --button Yes --button "Needs changes")
+```
 
 About 30 seconds before the deadline, the bot sends a check-in message. React
 to it with any emoji to add five minutes. This can repeat. On timeout, the bot

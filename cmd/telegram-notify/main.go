@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -29,6 +31,7 @@ const (
 	configDirName    = "telegram-notify"
 	configName       = "config.json"
 	requestTimeout   = 10 * time.Second
+	uploadTimeout    = 60 * time.Second
 	probeTimeout     = 5 * time.Second
 	pollTimeout      = 30 * time.Second
 	promptTimeout    = 5 * time.Minute
@@ -37,6 +40,8 @@ const (
 	checkinText      = "Still there? React to this message to get 5 more minutes."
 	timeoutText      = "Request timed out waiting for a reply."
 	callbackDataPref = "opt:"
+	maxPhotoSize     = 10 << 20
+	maxCaptionLength = 1024
 	eyesEmoji        = "\U0001F440"
 	// checkmarkEmoji acknowledges a button-tap answer. Telegram's setMessageReaction
 	// only accepts a fixed emoji set for bots and rejects "\u2705" (✅) with
@@ -108,6 +113,9 @@ func (s *stringList) String() string { return strings.Join(*s, ",") }
 
 type cliOptions struct {
 	text      stringOption
+	image     stringOption
+	file      stringOption
+	filename  stringOption
 	token     stringOption
 	chatID    stringOption
 	setToken  stringOption
@@ -116,6 +124,22 @@ type cliOptions struct {
 	prompt    bool
 	learn     bool
 	help      bool
+}
+
+type attachment struct {
+	file        models.InputFile
+	filename    string
+	contentType string
+	size        int
+	upload      bool
+}
+
+type outgoing struct {
+	text       string
+	attachment *attachment
+	asDocument bool
+	fallback   bool
+	buttons    []string
 }
 
 type settings struct {
@@ -139,13 +163,11 @@ type application struct {
 	checkAPI       func(context.Context) error
 	lookPath       func(string) (string, error)
 	learn          func(context.Context, string, time.Time) (int64, error)
-	send           func(context.Context, string, any, string) error
-	sendTracked    func(context.Context, string, any, string) (int, error)
-	sendPrompt     func(context.Context, string, any, string, []string) (int, error)
+	send           func(context.Context, string, any, outgoing) (int, error)
 	awaitAnswer    func(context.Context, string, int64, int, []string, time.Time) (promptAnswer, error)
 	answerCallback func(context.Context, string, string) error
 	removeKeyboard func(context.Context, string, int64, int) error
-	appendAnswer   func(context.Context, string, int64, int, string) error
+	appendAnswer   func(context.Context, string, int64, int, string, bool) error
 	react          func(context.Context, string, int64, int, string) error
 	redactions     *[]string
 }
@@ -165,13 +187,11 @@ func main() {
 		checkAPI:       checkTelegramAPI,
 		lookPath:       exec.LookPath,
 		learn:          learnChat,
-		send:           sendMessage,
-		sendTracked:    sendMessageTracked,
-		sendPrompt:     sendPromptMessage,
+		send:           sendOutgoing,
 		awaitAnswer:    awaitAnswer,
 		answerCallback: answerCallbackQuery,
 		removeKeyboard: removeInlineKeyboard,
-		appendAnswer:   appendAnswerText,
+		appendAnswer:   appendAnswer,
 		react:          react,
 		redactions:     &redactions,
 	}
@@ -224,14 +244,21 @@ func (app application) run(ctx context.Context, args []string) error {
 		return app.runLearn(ctx, path, cfg, resolved.token)
 	}
 
-	if opts.text.set {
+	if opts.text.set || opts.image.set || opts.file.set {
 		if missing := missingSettings(resolved); len(missing) > 0 {
 			return app.notConfigured(missing...)
 		}
-		if opts.prompt {
-			return app.runPrompt(ctx, resolved.token, resolved.chatID.value, opts.text.value, opts.buttons)
+		message, err := opts.outgoing()
+		if err != nil {
+			return err
 		}
-		if err := app.send(ctx, resolved.token, resolved.chatID.value, opts.text.value); err != nil {
+		if message.fallback {
+			fmt.Fprintln(app.stderr, "telegram-notify: --image sent as a file because Telegram photos must be images under 10 MB")
+		}
+		if opts.prompt {
+			return app.runPrompt(ctx, resolved.token, resolved.chatID.value, message)
+		}
+		if _, err := app.send(ctx, resolved.token, resolved.chatID.value, message); err != nil {
 			return fmt.Errorf("send message: %w", err)
 		}
 		return nil
@@ -249,6 +276,9 @@ func parseCLI(args []string) (cliOptions, error) {
 	flags := flag.NewFlagSet("telegram-notify", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.Var(&opts.text, "text", "message or question text")
+	flags.Var(&opts.image, "image", "image URL, path, data URI, base64 data, or - for stdin")
+	flags.Var(&opts.file, "file", "file URL, path, data URI, base64 data, or - for stdin")
+	flags.Var(&opts.filename, "filename", "filename for a base64 or stdin attachment")
 	flags.BoolVar(&opts.prompt, "prompt", false, "wait for a Telegram reply")
 	flags.Var(&opts.buttons, "button", "prompt button label; repeatable")
 	flags.Var(&opts.token, "token", "temporary bot token override")
@@ -271,7 +301,7 @@ func parseCLI(args []string) (cliOptions, error) {
 
 	setMode := opts.setToken.set || opts.setChatID.set
 	if setMode {
-		if opts.text.set || opts.prompt || len(opts.buttons) > 0 || opts.learn || opts.token.set || opts.chatID.set {
+		if opts.text.set || opts.image.set || opts.file.set || opts.filename.set || opts.prompt || len(opts.buttons) > 0 || opts.learn || opts.token.set || opts.chatID.set {
 			return cliOptions{}, errors.New("--set-token and --set-chat-id cannot be combined with action or override flags")
 		}
 		if opts.setToken.set && strings.TrimSpace(opts.setToken.value) == "" {
@@ -286,8 +316,8 @@ func parseCLI(args []string) (cliOptions, error) {
 	}
 
 	if opts.learn {
-		if opts.text.set || opts.prompt || len(opts.buttons) > 0 {
-			return cliOptions{}, errors.New("--learn cannot be combined with --text, --prompt, or --button")
+		if opts.text.set || opts.image.set || opts.file.set || opts.filename.set || opts.prompt || len(opts.buttons) > 0 {
+			return cliOptions{}, errors.New("--learn cannot be combined with --text, --image, --file, --filename, --prompt, or --button")
 		}
 		if opts.chatID.set {
 			return cliOptions{}, errors.New("--learn cannot be combined with --chat-id")
@@ -295,6 +325,18 @@ func parseCLI(args []string) (cliOptions, error) {
 	}
 	if opts.text.set && strings.TrimSpace(opts.text.value) == "" {
 		return cliOptions{}, errors.New("--text requires a non-empty value")
+	}
+	if opts.image.set && strings.TrimSpace(opts.image.value) == "" {
+		return cliOptions{}, errors.New("--image requires a non-empty value")
+	}
+	if opts.file.set && strings.TrimSpace(opts.file.value) == "" {
+		return cliOptions{}, errors.New("--file requires a non-empty value")
+	}
+	if opts.image.set && opts.file.set {
+		return cliOptions{}, errors.New("--image and --file cannot be combined")
+	}
+	if opts.filename.set && !opts.image.set && !opts.file.set {
+		return cliOptions{}, errors.New("--filename requires --image or --file")
 	}
 	if opts.prompt && !opts.text.set {
 		return cliOptions{}, errors.New("--prompt requires --text")
@@ -312,6 +354,8 @@ func parseCLI(args []string) (cliOptions, error) {
 
 const usageText = `Usage:
   telegram-notify --text "message"
+  telegram-notify --image SOURCE [--text "caption"]
+  telegram-notify --file SOURCE [--filename NAME] [--text "caption"]
   telegram-notify --text "question" --prompt [--button LABEL ...]
   telegram-notify --learn [--token TOKEN]
   telegram-notify --set-token TOKEN [--set-chat-id ID]
@@ -319,6 +363,9 @@ const usageText = `Usage:
 
 Options:
   --text TEXT        Message or question text.
+  --image SOURCE     Send an inline image from a URL, path, data URI, base64 data, or stdin.
+  --file SOURCE      Send a file from a URL, path, data URI, base64 data, or stdin.
+  --filename NAME    Override an attachment filename.
   --prompt           Wait for a text reply or button tap.
   --button LABEL     Add a prompt button. Repeat for more buttons.
   --token TOKEN      Override the bot token for this invocation.
@@ -454,34 +501,34 @@ func (app application) runLearn(ctx context.Context, path string, cfg config, to
 }
 
 func (app application) confirmConnection(ctx context.Context, token string, chatID *chatTarget) error {
-	if err := app.send(ctx, token, chatID.value, testMessageText); err != nil {
+	if _, err := app.send(ctx, token, chatID.value, outgoing{text: testMessageText}); err != nil {
 		return fmt.Errorf("chat ID was saved, but confirmation failed: %w", err)
 	}
 	fmt.Fprintf(app.stdout, "Connected to chat %v.\n", chatID.value)
 	return nil
 }
 
-func (app application) runPrompt(ctx context.Context, token string, chatID any, question string, buttons []string) error {
+func (app application) runPrompt(ctx context.Context, token string, chatID any, message outgoing) error {
 	numericChatID, ok := chatID.(int64)
 	if !ok {
 		return errors.New("--prompt requires a private/group chat, not a channel username")
 	}
 
 	sentAt := app.now()
-	msgID, err := app.sendPrompt(ctx, token, chatID, question, buttons)
+	msgID, err := app.send(ctx, token, chatID, message)
 	if err != nil {
 		return fmt.Errorf("send prompt: %w", err)
 	}
 
-	ans, err := app.awaitAnswer(ctx, token, numericChatID, msgID, buttons, sentAt)
+	ans, err := app.awaitAnswer(ctx, token, numericChatID, msgID, message.buttons, sentAt)
 	if err != nil {
-		if len(buttons) > 0 {
+		if len(message.buttons) > 0 {
 			if rmErr := app.removeKeyboard(ctx, token, numericChatID, msgID); rmErr != nil {
 				app.warn("failed to remove keyboard", rmErr)
 			}
 		}
 		if errors.Is(err, errPromptTimeout) {
-			if sendErr := app.send(ctx, token, chatID, timeoutText); sendErr != nil {
+			if _, sendErr := app.send(ctx, token, chatID, outgoing{text: timeoutText}); sendErr != nil {
 				app.warn("failed to send timeout notice", sendErr)
 			}
 		}
@@ -492,15 +539,15 @@ func (app application) runPrompt(ctx context.Context, token string, chatID any, 
 		if err := app.answerCallback(ctx, token, ans.callbackID); err != nil {
 			app.warn("answer callback failed", err)
 		}
-		answeredText := question + "\n\nAnswer: " + ans.text
-		if err := app.appendAnswer(ctx, token, numericChatID, msgID, answeredText); err != nil {
+		answeredText := message.text + "\n\nAnswer: " + ans.text
+		if err := app.appendAnswer(ctx, token, numericChatID, msgID, answeredText, message.attachment != nil); err != nil {
 			app.warn("failed to record answer on message", err)
 		}
 		if err := app.react(ctx, token, numericChatID, msgID, checkmarkEmoji); err != nil {
 			app.warn("react with checkmark failed", err)
 		}
 	} else {
-		if len(buttons) > 0 {
+		if len(message.buttons) > 0 {
 			if err := app.removeKeyboard(ctx, token, numericChatID, msgID); err != nil {
 				app.warn("failed to remove keyboard", err)
 			}
@@ -512,6 +559,134 @@ func (app application) runPrompt(ctx context.Context, token string, chatID any, 
 
 	fmt.Fprintln(app.stdout, ans.text)
 	return nil
+}
+
+func (opts cliOptions) outgoing() (outgoing, error) {
+	message := outgoing{text: opts.text.value, buttons: opts.buttons}
+	source := opts.image
+	if opts.file.set {
+		source = opts.file
+		message.asDocument = true
+	}
+	if !source.set {
+		return message, nil
+	}
+	if len(message.text) > maxCaptionLength {
+		return outgoing{}, fmt.Errorf("--text caption must be at most %d characters", maxCaptionLength)
+	}
+	attachment, err := resolveAttachment(source.value, opts.filename.value)
+	if err != nil {
+		return outgoing{}, err
+	}
+	if !message.asDocument && attachment.upload && (attachment.size > maxPhotoSize || !strings.HasPrefix(attachment.contentType, "image/")) {
+		message.asDocument = true
+		message.fallback = true
+	}
+	message.attachment = &attachment
+	return message, nil
+}
+
+func resolveAttachment(source, filename string) (attachment, error) {
+	return resolveAttachmentFrom(source, filename, os.Stdin)
+}
+
+func resolveAttachmentFrom(source, filename string, stdin io.Reader) (attachment, error) {
+	source = strings.TrimSpace(source)
+	if strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
+		if filename == "" {
+			filename = filepath.Base(strings.Split(strings.TrimRight(source, "/"), "?")[0])
+		}
+		return attachment{file: &models.InputFileString{Data: source}, filename: filename}, nil
+	}
+
+	var data []byte
+	var inferredName string
+	switch {
+	case strings.HasPrefix(source, "data:"):
+		comma := strings.IndexByte(source, ',')
+		if comma < 0 || !strings.Contains(source[:comma], ";base64") {
+			return attachment{}, errors.New("attachment data URI must be base64 encoded")
+		}
+		decoded, err := decodeBase64(source[comma+1:])
+		if err != nil {
+			return attachment{}, fmt.Errorf("decode attachment data URI: %w", err)
+		}
+		data = decoded
+	case source == "-":
+		raw, err := io.ReadAll(stdin)
+		if err != nil {
+			return attachment{}, fmt.Errorf("read attachment stdin: %w", err)
+		}
+		if decoded, err := decodeBase64(string(raw)); err == nil {
+			data = decoded
+		} else {
+			data = raw
+		}
+	default:
+		path := expandHome(source)
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			data, err = os.ReadFile(path)
+			if err != nil {
+				return attachment{}, fmt.Errorf("read attachment: %w", err)
+			}
+			inferredName = filepath.Base(path)
+		} else if decoded, err := decodeBase64(source); err == nil && len(strings.TrimSpace(source)) >= 64 {
+			data = decoded
+		} else {
+			return attachment{}, errors.New("attachment must be a URL, a file path, a data URI, or base64 data")
+		}
+	}
+	contentType := http.DetectContentType(data)
+	if filename == "" {
+		filename = inferredName
+	}
+	if filename == "" {
+		filename = filenameForContentType(contentType)
+	}
+	return attachment{
+		file:        &models.InputFileUpload{Filename: filename, Data: bytes.NewReader(data)},
+		filename:    filename,
+		contentType: contentType,
+		size:        len(data),
+		upload:      true,
+	}, nil
+}
+
+func decodeBase64(value string) ([]byte, error) {
+	value = strings.Map(func(r rune) rune {
+		if r == ' ' || r == '\n' || r == '\r' || r == '\t' {
+			return -1
+		}
+		return r
+	}, value)
+	if decoded, err := base64.StdEncoding.DecodeString(value); err == nil {
+		return decoded, nil
+	}
+	return base64.RawStdEncoding.DecodeString(value)
+}
+
+func expandHome(path string) string {
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, strings.TrimPrefix(path, "~/"))
+		}
+	}
+	return path
+}
+
+func filenameForContentType(contentType string) string {
+	switch contentType {
+	case "image/png":
+		return "image.png"
+	case "image/jpeg":
+		return "image.jpg"
+	case "image/gif":
+		return "image.gif"
+	case "application/pdf":
+		return "file.pdf"
+	default:
+		return "file.bin"
+	}
 }
 
 func defaultConfigPath() (string, error) {
@@ -647,59 +822,52 @@ func inlineKeyboard(buttons []string) *models.InlineKeyboardMarkup {
 	return &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{row}}
 }
 
-func sendMessage(ctx context.Context, token string, chatID any, message string) error {
-	client, err := bot.New(
+func newClient(token string, timeout time.Duration) (*bot.Bot, error) {
+	return bot.New(
 		token,
 		bot.WithSkipGetMe(),
-		bot.WithHTTPClient(requestTimeout, &http.Client{Timeout: requestTimeout}),
+		bot.WithHTTPClient(timeout, &http.Client{Timeout: timeout}),
 	)
-	if err != nil {
-		return err
-	}
-
-	requestCtx, cancel := context.WithTimeout(ctx, requestTimeout)
-	defer cancel()
-	_, err = client.SendMessage(requestCtx, &bot.SendMessageParams{ChatID: chatID, Text: message})
-	return err
 }
 
-func sendPromptMessage(ctx context.Context, token string, chatID any, question string, buttons []string) (int, error) {
-	client, err := bot.New(
-		token,
-		bot.WithSkipGetMe(),
-		bot.WithHTTPClient(requestTimeout, &http.Client{Timeout: requestTimeout}),
-	)
+func sendOutgoing(ctx context.Context, token string, chatID any, message outgoing) (int, error) {
+	timeout := requestTimeout
+	if message.attachment != nil && message.attachment.upload {
+		timeout = uploadTimeout
+	}
+	client, err := newClient(token, timeout)
 	if err != nil {
 		return 0, err
 	}
-
-	params := &bot.SendMessageParams{ChatID: chatID, Text: question}
-	if markup := inlineKeyboard(buttons); markup != nil {
+	requestCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if message.attachment == nil {
+		params := &bot.SendMessageParams{ChatID: chatID, Text: message.text}
+		if markup := inlineKeyboard(message.buttons); markup != nil {
+			params.ReplyMarkup = markup
+		}
+		msg, err := client.SendMessage(requestCtx, params)
+		if err != nil {
+			return 0, err
+		}
+		return msg.ID, nil
+	}
+	if message.asDocument {
+		params := &bot.SendDocumentParams{ChatID: chatID, Document: message.attachment.file, Caption: message.text}
+		if markup := inlineKeyboard(message.buttons); markup != nil {
+			params.ReplyMarkup = markup
+		}
+		msg, err := client.SendDocument(requestCtx, params)
+		if err != nil {
+			return 0, err
+		}
+		return msg.ID, nil
+	}
+	params := &bot.SendPhotoParams{ChatID: chatID, Photo: message.attachment.file, Caption: message.text}
+	if markup := inlineKeyboard(message.buttons); markup != nil {
 		params.ReplyMarkup = markup
 	}
-
-	requestCtx, cancel := context.WithTimeout(ctx, requestTimeout)
-	defer cancel()
-	msg, err := client.SendMessage(requestCtx, params)
-	if err != nil {
-		return 0, err
-	}
-	return msg.ID, nil
-}
-
-func sendMessageTracked(ctx context.Context, token string, chatID any, message string) (int, error) {
-	client, err := bot.New(
-		token,
-		bot.WithSkipGetMe(),
-		bot.WithHTTPClient(requestTimeout, &http.Client{Timeout: requestTimeout}),
-	)
-	if err != nil {
-		return 0, err
-	}
-
-	requestCtx, cancel := context.WithTimeout(ctx, requestTimeout)
-	defer cancel()
-	msg, err := client.SendMessage(requestCtx, &bot.SendMessageParams{ChatID: chatID, Text: message})
+	msg, err := client.SendPhoto(requestCtx, params)
 	if err != nil {
 		return 0, err
 	}
@@ -746,7 +914,7 @@ func removeInlineKeyboard(ctx context.Context, token string, chatID int64, messa
 	return err
 }
 
-func appendAnswerText(ctx context.Context, token string, chatID int64, messageID int, text string) error {
+func appendAnswer(ctx context.Context, token string, chatID int64, messageID int, text string, hasAttachment bool) error {
 	client, err := bot.New(
 		token,
 		bot.WithSkipGetMe(),
@@ -758,13 +926,16 @@ func appendAnswerText(ctx context.Context, token string, chatID int64, messageID
 
 	requestCtx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
+	if hasAttachment {
+		_, err = client.EditMessageCaption(requestCtx, &bot.EditMessageCaptionParams{
+			ChatID: chatID, MessageID: messageID, Caption: text,
+			ReplyMarkup: models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{}},
+		})
+		return err
+	}
 	_, err = client.EditMessageText(requestCtx, &bot.EditMessageTextParams{
-		ChatID:    chatID,
-		MessageID: messageID,
-		Text:      text,
-		ReplyMarkup: models.InlineKeyboardMarkup{
-			InlineKeyboard: [][]models.InlineKeyboardButton{},
-		},
+		ChatID: chatID, MessageID: messageID, Text: text,
+		ReplyMarkup: models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{}},
 	})
 	return err
 }
@@ -878,7 +1049,7 @@ func awaitAnswer(ctx context.Context, token string, chatID int64, questionMsgID 
 			sent := checkinSent
 			mu.Unlock()
 			if !sent {
-				id, sendErr := sendMessageTracked(ctx, token, chatID, checkinText)
+				id, sendErr := sendOutgoing(ctx, token, chatID, outgoing{text: checkinText})
 				if sendErr == nil {
 					mu.Lock()
 					checkinSent, checkinMsgID = true, id

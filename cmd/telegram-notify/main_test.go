@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"os"
@@ -21,9 +23,9 @@ func TestRunSendsMessageToEnvironmentChat(t *testing.T) {
 		botTokenEnv: "secret",
 		chatIDEnv:   "-123",
 	})
-	app.send = func(_ context.Context, token string, chatID any, message string) error {
-		gotToken, gotChatID, gotMessage = token, chatID, message
-		return nil
+	app.send = func(_ context.Context, token string, chatID any, message outgoing) (int, error) {
+		gotToken, gotChatID, gotMessage = token, chatID, message.text
+		return 1, nil
 	}
 
 	if err := app.run(context.Background(), []string{"--text", "job finished"}); err != nil {
@@ -43,9 +45,9 @@ func TestRunUsesSavedChat(t *testing.T) {
 	var gotChatID any
 	app := testApplication(map[string]string{botTokenEnv: "secret"})
 	app.configPath = func() (string, error) { return path, nil }
-	app.send = func(_ context.Context, _ string, chatID any, _ string) error {
+	app.send = func(_ context.Context, _ string, chatID any, _ outgoing) (int, error) {
 		gotChatID = chatID
-		return nil
+		return 1, nil
 	}
 
 	if err := app.run(context.Background(), []string{"--text", "done"}); err != nil {
@@ -58,11 +60,11 @@ func TestRunUsesSavedChat(t *testing.T) {
 
 func TestRunAllowsChannelUsername(t *testing.T) {
 	app := testApplication(map[string]string{botTokenEnv: "secret", chatIDEnv: "@alerts"})
-	app.send = func(_ context.Context, _ string, chatID any, _ string) error {
+	app.send = func(_ context.Context, _ string, chatID any, _ outgoing) (int, error) {
 		if chatID != "@alerts" {
 			t.Fatalf("got chat ID %v", chatID)
 		}
-		return nil
+		return 1, nil
 	}
 	if err := app.run(context.Background(), []string{"--text", "done"}); err != nil {
 		t.Fatal(err)
@@ -118,9 +120,9 @@ func TestRunLearnSavesChatAndConfirms(t *testing.T) {
 		}
 		return 789, nil
 	}
-	app.send = func(_ context.Context, token string, chatID any, message string) error {
-		sent = []any{token, chatID, message}
-		return nil
+	app.send = func(_ context.Context, token string, chatID any, message outgoing) (int, error) {
+		sent = []any{token, chatID, message.text}
+		return 1, nil
 	}
 
 	if err := app.run(context.Background(), []string{"--learn"}); err != nil {
@@ -392,14 +394,8 @@ func testApplication(env map[string]string) application {
 		learn: func(context.Context, string, time.Time) (int64, error) {
 			return 0, errors.New("unexpected learn")
 		},
-		send: func(context.Context, string, any, string) error {
-			return errors.New("unexpected send")
-		},
-		sendTracked: func(context.Context, string, any, string) (int, error) {
-			return 0, errors.New("unexpected sendTracked")
-		},
-		sendPrompt: func(context.Context, string, any, string, []string) (int, error) {
-			return 0, errors.New("unexpected sendPrompt")
+		send: func(context.Context, string, any, outgoing) (int, error) {
+			return 0, errors.New("unexpected send")
 		},
 		awaitAnswer: func(context.Context, string, int64, int, []string, time.Time) (promptAnswer, error) {
 			return promptAnswer{}, errors.New("unexpected awaitAnswer")
@@ -410,7 +406,7 @@ func testApplication(env map[string]string) application {
 		removeKeyboard: func(context.Context, string, int64, int) error {
 			return errors.New("unexpected removeKeyboard")
 		},
-		appendAnswer: func(context.Context, string, int64, int, string) error {
+		appendAnswer: func(context.Context, string, int64, int, string, bool) error {
 			return errors.New("unexpected appendAnswer")
 		},
 		react: func(context.Context, string, int64, int, string) error {
@@ -433,6 +429,81 @@ func TestParseCLI(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "needs an argument") {
 		t.Fatalf("got %v", err)
 	}
+
+	for _, args := range [][]string{
+		{"--image", "a", "--file", "b"},
+		{"--filename", "report.pdf"},
+		{"--learn", "--file", "report.pdf"},
+	} {
+		if _, err := parseCLI(args); err == nil {
+			t.Fatalf("expected validation error for %v", args)
+		}
+	}
+}
+
+func TestResolveAttachment(t *testing.T) {
+	png := []byte("\x89PNG\r\n\x1a\n")
+	path := filepath.Join(t.TempDir(), "chart.png")
+	if err := os.WriteFile(path, png, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name, source, filename string
+		stdin                  string
+		wantName, wantType     string
+	}{
+		{"URL", "https://example.com/chart.png", "", "", "chart.png", ""},
+		{"data URI", "data:image/png;base64,iVBORw0KGgo=", "", "", "image.png", "image/png"},
+		{"path", path, "", "", "chart.png", "image/png"},
+		{"stdin", "-", "stdin.png", "iVBORw0KGgo=", "stdin.png", "image/png"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveAttachmentFrom(tt.source, tt.filename, strings.NewReader(tt.stdin))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.filename != tt.wantName || got.contentType != tt.wantType {
+				t.Fatalf("got filename=%q contentType=%q", got.filename, got.contentType)
+			}
+		})
+	}
+	raw := base64.StdEncoding.EncodeToString(bytes.Repeat(png, 10))
+	if got, err := resolveAttachment(raw, "upload.png"); err != nil || got.filename != "upload.png" || got.contentType != "image/png" {
+		t.Fatalf("raw base64 attachment: %#v, %v", got, err)
+	}
+	if _, err := resolveAttachment("not a source", ""); err == nil {
+		t.Fatal("expected invalid source error")
+	}
+}
+
+func TestRunSendsAttachment(t *testing.T) {
+	var got outgoing
+	var stderr strings.Builder
+	app := testApplication(map[string]string{botTokenEnv: "secret", chatIDEnv: "42"})
+	app.stderr = &stderr
+	app.send = func(_ context.Context, _ string, _ any, message outgoing) (int, error) {
+		got = message
+		return 1, nil
+	}
+	if err := app.run(context.Background(), []string{"--text", "chart", "--image", "data:image/png;base64,iVBORw0KGgo="}); err != nil {
+		t.Fatal(err)
+	}
+	if got.attachment == nil || got.asDocument || got.text != "chart" {
+		t.Fatalf("unexpected image outgoing: %#v", got)
+	}
+	if err := app.run(context.Background(), []string{"--file", "data:application/pdf;base64,JVBERi0="}); err != nil {
+		t.Fatal(err)
+	}
+	if got.attachment == nil || !got.asDocument {
+		t.Fatalf("unexpected file outgoing: %#v", got)
+	}
+	if err := app.run(context.Background(), []string{"--image", "data:application/pdf;base64,JVBERi0="}); err != nil {
+		t.Fatal(err)
+	}
+	if !got.asDocument || !strings.Contains(stderr.String(), "sent as a file") {
+		t.Fatalf("fallback document=%v warning=%q", got.asDocument, stderr.String())
+	}
 }
 
 func TestRunPromptSendsQuestionAndReturnsReply(t *testing.T) {
@@ -443,11 +514,11 @@ func TestRunPromptSendsQuestionAndReturnsReply(t *testing.T) {
 	var stdout strings.Builder
 	app := testApplication(map[string]string{botTokenEnv: "secret", chatIDEnv: "42"})
 	app.stdout = &stdout
-	app.sendPrompt = func(_ context.Context, _ string, chatID any, question string, buttons []string) (int, error) {
+	app.send = func(_ context.Context, _ string, chatID any, message outgoing) (int, error) {
 		if chatID != int64(42) {
 			t.Fatalf("unexpected chat %v", chatID)
 		}
-		promptQuestion, promptButtons = question, buttons
+		promptQuestion, promptButtons = message.text, message.buttons
 		return 10, nil
 	}
 	app.awaitAnswer = func(_ context.Context, _ string, chatID int64, questionMsgID int, buttons []string, _ time.Time) (promptAnswer, error) {
@@ -486,8 +557,8 @@ func TestRunPromptWithButtonTap(t *testing.T) {
 	var stdout strings.Builder
 	app := testApplication(map[string]string{botTokenEnv: "secret", chatIDEnv: "42"})
 	app.stdout = &stdout
-	app.sendPrompt = func(_ context.Context, _ string, _ any, _ string, buttons []string) (int, error) {
-		gotButtons = buttons
+	app.send = func(_ context.Context, _ string, _ any, message outgoing) (int, error) {
+		gotButtons = message.buttons
 		return 11, nil
 	}
 	app.awaitAnswer = func(context.Context, string, int64, int, []string, time.Time) (promptAnswer, error) {
@@ -501,7 +572,7 @@ func TestRunPromptWithButtonTap(t *testing.T) {
 		callbackID = id
 		return nil
 	}
-	app.appendAnswer = func(_ context.Context, _ string, chatID int64, messageID int, text string) error {
+	app.appendAnswer = func(_ context.Context, _ string, chatID int64, messageID int, text string, _ bool) error {
 		if chatID != 42 || messageID != 11 {
 			t.Fatalf("unexpected appendAnswer chat=%d msg=%d", chatID, messageID)
 		}
@@ -538,6 +609,34 @@ func TestRunPromptWithButtonTap(t *testing.T) {
 	}
 }
 
+func TestRunPromptWithAttachmentEditsCaption(t *testing.T) {
+	var got outgoing
+	var hasAttachment bool
+	app := testApplication(map[string]string{botTokenEnv: "secret", chatIDEnv: "42"})
+	app.send = func(_ context.Context, _ string, _ any, message outgoing) (int, error) {
+		got = message
+		return 11, nil
+	}
+	app.awaitAnswer = func(context.Context, string, int64, int, []string, time.Time) (promptAnswer, error) {
+		return promptAnswer{text: "Yes", callbackID: "cb-1"}, nil
+	}
+	app.answerCallback = func(context.Context, string, string) error { return nil }
+	app.appendAnswer = func(_ context.Context, _ string, _ int64, _ int, _ string, attachment bool) error {
+		hasAttachment = attachment
+		return nil
+	}
+	app.react = func(context.Context, string, int64, int, string) error { return nil }
+
+	if err := app.run(context.Background(), []string{
+		"--text", "Looks good?", "--image", "data:image/png;base64,iVBORw0KGgo=", "--prompt", "--button", "Yes",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got.attachment == nil || !hasAttachment {
+		t.Fatalf("attachment=%#v hasAttachment=%v", got.attachment, hasAttachment)
+	}
+}
+
 func TestRunPromptTextReplyWithButtonsRemovesKeyboard(t *testing.T) {
 	var removeCalled bool
 	var reactedMsg int
@@ -545,7 +644,7 @@ func TestRunPromptTextReplyWithButtonsRemovesKeyboard(t *testing.T) {
 	var callbackCalled bool
 	var appendCalled bool
 	app := testApplication(map[string]string{botTokenEnv: "secret", chatIDEnv: "42"})
-	app.sendPrompt = func(context.Context, string, any, string, []string) (int, error) { return 5, nil }
+	app.send = func(context.Context, string, any, outgoing) (int, error) { return 5, nil }
 	app.awaitAnswer = func(context.Context, string, int64, int, []string, time.Time) (promptAnswer, error) {
 		return promptAnswer{text: "custom", replyMsgID: 7}, nil
 	}
@@ -561,7 +660,7 @@ func TestRunPromptTextReplyWithButtonsRemovesKeyboard(t *testing.T) {
 		callbackCalled = true
 		return nil
 	}
-	app.appendAnswer = func(context.Context, string, int64, int, string) error {
+	app.appendAnswer = func(context.Context, string, int64, int, string, bool) error {
 		appendCalled = true
 		return nil
 	}
@@ -581,10 +680,12 @@ func TestRunPromptTimesOutAndNotifiesChat(t *testing.T) {
 	var sends []string
 	var removeCalled bool
 	app := testApplication(map[string]string{botTokenEnv: "secret", chatIDEnv: "42"})
-	app.sendPrompt = func(context.Context, string, any, string, []string) (int, error) { return 1, nil }
-	app.send = func(_ context.Context, _ string, _ any, message string) error {
-		sends = append(sends, message)
-		return nil
+	app.send = func(_ context.Context, _ string, _ any, message outgoing) (int, error) {
+		if message.buttons != nil {
+			return 1, nil
+		}
+		sends = append(sends, message.text)
+		return 1, nil
 	}
 	app.awaitAnswer = func(context.Context, string, int64, int, []string, time.Time) (promptAnswer, error) {
 		return promptAnswer{}, errPromptTimeout
@@ -606,8 +707,7 @@ func TestRunPromptTimesOutAndNotifiesChat(t *testing.T) {
 func TestRunPromptTimesOutWithoutButtonsSkipsRemove(t *testing.T) {
 	var removeCalled bool
 	app := testApplication(map[string]string{botTokenEnv: "secret", chatIDEnv: "42"})
-	app.sendPrompt = func(context.Context, string, any, string, []string) (int, error) { return 1, nil }
-	app.send = func(context.Context, string, any, string) error { return nil }
+	app.send = func(context.Context, string, any, outgoing) (int, error) { return 1, nil }
 	app.awaitAnswer = func(context.Context, string, int64, int, []string, time.Time) (promptAnswer, error) {
 		return promptAnswer{}, errPromptTimeout
 	}
@@ -645,7 +745,7 @@ func TestRunPromptReactFailureStillReturnsReply(t *testing.T) {
 	var stdout strings.Builder
 	app := testApplication(map[string]string{botTokenEnv: "secret", chatIDEnv: "42"})
 	app.stdout = &stdout
-	app.sendPrompt = func(context.Context, string, any, string, []string) (int, error) { return 1, nil }
+	app.send = func(context.Context, string, any, outgoing) (int, error) { return 1, nil }
 	app.awaitAnswer = func(context.Context, string, int64, int, []string, time.Time) (promptAnswer, error) {
 		return promptAnswer{text: "ok", replyMsgID: 1}, nil
 	}

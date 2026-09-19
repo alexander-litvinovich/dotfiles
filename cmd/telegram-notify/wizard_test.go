@@ -487,9 +487,9 @@ func TestWizardCmds(t *testing.T) {
 	}
 
 	var sent []any
-	app.send = func(_ context.Context, token string, chatID any, message string) error {
-		sent = []any{token, chatID, message}
-		return nil
+	app.send = func(_ context.Context, token string, chatID any, message outgoing) (int, error) {
+		sent = []any{token, chatID, message.text}
+		return 1, nil
 	}
 	w.app = app
 	if msg := w.finishCmd(int64(55))().(setupFinishedMsg); msg.testErr != nil || !msg.onPath {
@@ -609,7 +609,7 @@ func TestCountdownTicksDuringWait(t *testing.T) {
 		time.Sleep(2500 * time.Millisecond)
 		return 77, nil
 	}
-	app.send = func(context.Context, string, any, string) error { return nil }
+	app.send = func(context.Context, string, any, outgoing) (int, error) { return 1, nil }
 
 	w := newWizard(app, context.Background(), path, config{}, settings{})
 	program := tea.NewProgram(w, tea.WithInput(delayedInput("secret-token\r")), tea.WithOutput(&out))
@@ -633,7 +633,7 @@ func TestWizardSmokeRun(t *testing.T) {
 	app.stdout = &out
 	app.validateToken = func(context.Context, string) (string, error) { return "mybot", nil }
 	app.learn = func(context.Context, string, time.Time) (int64, error) { return 77, nil }
-	app.send = func(context.Context, string, any, string) error { return nil }
+	app.send = func(context.Context, string, any, outgoing) (int, error) { return 1, nil }
 
 	w := newWizard(app, context.Background(), path, config{}, settings{})
 	program := tea.NewProgram(w, tea.WithInput(delayedInput("secret-token\r")), tea.WithOutput(&out))

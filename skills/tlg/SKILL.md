@@ -38,6 +38,35 @@ telegram-notify --text "your message here"
 Run `telegram-notify` without arguments for first-time setup. Full setup and
 override instructions: [cmd/telegram-notify/README.md](../../cmd/telegram-notify/README.md).
 
+## Attaching an image or a file
+
+An attachment replaces the normal completion ping. Do not send a second
+message for the same task.
+
+Use `--image` when the user needs an inline preview: screenshots, charts,
+diagrams, and rendered output.
+
+```bash
+telegram-notify --text "Done: rendered the dependency graph" --image /tmp/graph.png
+```
+
+Use `--file` when the bytes matter or the result is not an image: logs,
+reports, PDFs, archives, `.excalidraw` and `.tldr` source files, and
+text-heavy screenshots that Telegram would blur.
+
+```bash
+telegram-notify --text "Done: attached the audit report" --file /tmp/report.pdf
+```
+
+Pass the path the agent just wrote whenever possible. `--image` and `--file`
+also accept an HTTP(S) URL, base64 data, a base64 `data:` URI, or `-` for
+stdin. Use `--filename report.pdf` with stdin or base64 when the displayed
+filename matters.
+
+`--text` becomes the attachment caption. Keep it to one short line and under
+1024 characters; detailed results stay in chat. `--image` falls back to a
+file with a warning when the upload exceeds 10 MB or is not an image.
+
 ## First-time setup
 
 No preflight check: just attempt the send. When the util is not configured,
@@ -75,6 +104,14 @@ For yes/no or fixed choices, add `--button` (repeatable):
 answer=$(telegram-notify --text "Proceed with deploy?" --prompt --button Yes --button No)
 ```
 
+For visual approval, attach the preview to the question. The answer still
+arrives on stdout:
+
+```bash
+answer=$(telegram-notify --text "Does this look right?" --image /tmp/preview.png \
+  --prompt --button "Looks good" --button "Fix it")
+```
+
 Use `--text "question" --prompt` without `--button` for a free-form answer.
 
 Use this only when you truly need their input; keep using a plain `telegram-notify` message for completion pings.
@@ -104,7 +141,7 @@ Keep it push-notification sized: a few words to one short sentence. No stack tra
 
 ## Errors
 
-If `telegram-notify` exits non-zero (including a `--prompt` timeout), tell the user once in chat what failed (stderr is enough). Point them to [cmd/telegram-notify/README.md](../../cmd/telegram-notify/README.md). Do not retry in a loop.
+If `telegram-notify` exits non-zero (including a `--prompt` timeout), tell the user once in chat what failed (stderr is enough). The same applies to invalid attachments and caption-length errors. Point them to [cmd/telegram-notify/README.md](../../cmd/telegram-notify/README.md). Do not retry in a loop.
 
 ## Examples
 
