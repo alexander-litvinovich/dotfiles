@@ -84,6 +84,7 @@ cask 'google-chrome'
 cask 'zen'
 
 # Communication
+cask 'bettertomorrow-dev/tap/tlgme' # Telegram bot CLI
 cask 'telegram-desktop'
 cask 'whatsapp'
 
