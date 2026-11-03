@@ -1,0 +1,63 @@
+# Shared packages for any Mac.
+# Install: brew bundle --file ./Brewfile.base
+
+# Shell and CLI
+brew 'coreutils' # Core utilities
+brew 'git' # Version control system
+brew 'gh'
+brew 'midnight-commander'
+brew 'rtk' # Shell
+brew 'zsh' # Shell
+brew 'make'
+brew 'cloudflared'
+brew 'rclone'
+
+# Image processing + Design
+cask 'figma'
+brew 'gifski'
+
+# OCR
+brew 'tesseract'
+brew 'tesseract-lang'
+
+# Development
+brew 'go'
+brew 'node'
+brew 'pnpm'
+brew 'python'
+
+cask 'orbstack'
+cask 'visual-studio-code'
+cask 'windows-app'
+
+# Productivity and utilities
+cask 'bettertomorrow-dev/tap/tlgme'
+brew 'dockutil'
+cask 'appcleaner' # App uninstaller
+
+cask 'cmux' # Terminal
+cask 'deepl' # Translator
+cask 'deskpad' # Virtual monitor
+cask 'hyperkey'
+cask 'loop' # Window management
+cask 'raycast' # Launcher
+cask 'thaw' # Menu bar icon manager
+cask 'the-unarchiver' # Unarchiver
+cask 'openlogi'
+
+# Browsers
+cask 'boop'
+cask 'chromium'
+cask 'google-chrome'
+cask 'zen'
+cask 'handy'
+
+# Miscellaneous apps
+cask 'claude-code'
+cask 'codex'
+cask 'opencode'
+cask 'chatgpt'
+
+# Quick Look extensions
+cask 'qlmarkdown'
+cask 'telegram-desktop'

@@ -1,0 +1,10 @@
+# Extra packages for not my Mac, installed after Brewfile.base.
+# Install: brew bundle --file ./Brewfile.additional
+brew 'prek'
+brew 'helm'
+brew 'kind'
+brew 'kubernetes-cli'
+brew 'pyenv'
+brew 'nvm'
+brew 'rust'
+cask 'slack'

@@ -1,0 +1,19 @@
+# Extra packages for my Mac, installed after Brewfile.base.
+# Install: brew bundle --file ./Brewfile.etc
+
+# Design and 3D
+cask 'autodesk-fusion'
+
+# Networking and file sharing
+brew 'tailscale'
+cask 'tailscale-app'
+cask 'outline-manager'
+cask 'localsend'
+
+# Communication
+
+cask 'whatsapp'
+cask 'bitwarden'
+cask 'antigravity-cli'
+
+cask 'android-studio'
