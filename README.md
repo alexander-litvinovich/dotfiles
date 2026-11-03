@@ -122,16 +122,14 @@ Batch file renaming utility:
 - Preserves file extensions
 - Useful for anonymizing file names
 
-#### `telegram-notify`
+#### `tlgme`
 
-Personal Telegram notifier for scripts and coding agents. First setup is an
-interactive chat wizard: run `telegram-notify` in a terminal with no
-arguments. An agent can also guide setup non-interactively with
-`--set-token` and `--learn`. Unconfigured commands print
-`not configured: missing ...` to stdout and exit 1. See
-[`cmd/telegram-notify/README.md`](cmd/telegram-notify/README.md) for setup
-and usage. Send rendered output with `--image`, or any lossless attachment
-with `--file`.
+Personal Telegram bot CLI for scripts and coding agents, installed automatically
+through the Brewfile. Run `tlgme` in a terminal for first-time setup. Use
+`tlgme --text "message"` to send a notification, or add `--prompt` to wait for
+a reply. The bundled `/tlg` skill uses this CLI. See the
+[TlgMe README](https://github.com/bettertomorrow-dev/tlgme#readme) for setup
+and usage, including images and file attachments.
 
 ### `configs/`
 
