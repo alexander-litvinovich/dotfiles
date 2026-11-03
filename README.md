@@ -39,7 +39,7 @@ Main installation script that bootstraps your Mac setup:
 
 - Installs Xcode Command Line Tools
 - Installs Homebrew package manager
-- Installs all packages and applications from `Brewfile`
+- Asks whether this is "my Mac" or "not my Mac" and installs the matching packages
 - Installs Oh My Zsh shell framework
 - Creates `~/dev` directory for projects
 - Links dotfiles, global agent instructions, and personal agent skills
@@ -92,28 +92,14 @@ Network configuration script:
 - Disables IPv6 on Wi-Fi and iPhone USB connections
 - Useful for specific network scenarios or tethering
 
-### `Brewfile`
+### Homebrew manifests
 
-Homebrew package manifest defining all software to install:
+- `Brewfile.base` contains shared development tools and desktop apps, including Python and `tlgme`.
+- `Brewfile.etc` adds packages for "my Mac", including Autodesk Fusion, Tailscale, and Android Studio.
+- `Brewfile.additional` adds packages for "not my Mac", including prek, Helm, kind, kubernetes-cli, pyenv, nvm, Rust, and Slack.
 
-**Image Processing Tools:**
-
-- jpegoptim, optipng, pngquant, svgo, gifsicle
-- ImageMagick, ImageOptim
-- Tesseract OCR with language packs
-
-**Development Tools:**
-
-- Node.js, Yarn, Git, Coreutils, Tmux
-- Visual Studio Code, OrbStack, Postman, pgAdmin4
-
-**Desktop Applications:**
-
-- **Browsers**: Google Chrome, Chromium
-- **Design**: Figma
-- **Productivity**: Raycast, Loop, DeepL, Boop
-- **Utilities**: AppCleaner, The Unarchiver, DeskPad, Ice
-- **QuickLook Plugins**: qlmarkdown, quicklook-json
+Run `./install.sh` and choose `1` for "not my Mac" to install base + additional,
+or `2` for "my Mac" to install base + etc.
 
 ### `bin/`
 
@@ -156,10 +142,6 @@ Zsh shell configuration with custom settings and aliases
 Machine- or company-specific values belong in `configs/.zshrc.local`, which is
 ignored by Git and sourced only when present. Run `./link_configs.sh` after
 creating it to link it as `~/.zshrc.local`.
-
-#### `.tmux.conf`
-
-Tmux terminal multiplexer configuration
 
 _Note: These files are symlinked to `~/` by `link_configs.sh`_
 
@@ -249,7 +231,11 @@ Script to manage Continue extension configuration:
 **Update Homebrew packages:**
 
 ```bash
-brew bundle --file ./Brewfile
+brew bundle --file ./Brewfile.base
+# Not my Mac:
+brew bundle --file ./Brewfile.additional
+# My Mac:
+brew bundle --file ./Brewfile.etc
 ```
 
 **Use OCR screenshot tool:**
@@ -277,7 +263,8 @@ cd vscode
 
 ### Adding New Packages
 
-Edit `Brewfile` and add:
+Edit `Brewfile.base` for shared packages, `Brewfile.etc` for "my Mac",
+or `Brewfile.additional` for "not my Mac":
 
 ```ruby
 brew 'package-name'        # for CLI tools
