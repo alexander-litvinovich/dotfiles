@@ -324,6 +324,28 @@ Most dependencies are installed automatically by `install.sh`:
 - Some settings require logout/restart to take effect
 - Update Git credentials in `git_config.sh` before running
 
+## Closed-lid server mode
+
+`lid-awake on`, `lid-awake off`, and `lid-awake status` control macOS's global
+sleep override. `lid-awake toggle` switches between the two states. It applies
+on battery too; turn it off before putting the Mac in a bag. Keep T3 Code open
+for mobile access.
+
+For Raycast, add this repository's `raycast-scripts` directory under Extensions
+→ Script Commands → Add Directories, then run **Lid Awake On**, **Lid Awake Off**,
+or **Toggle Lid Awake**. You can assign each command a hotkey in Raycast.
+
+One-time password-free setup: use `sudo visudo -f /etc/sudoers.d/lid-awake`
+and add the following line, replacing `alex` with your macOS username:
+
+```sudoers
+alex ALL=(root) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1
+```
+
+This grants only those two exact commands. The CLI uses `sudo -n`, so it never
+prompts for a password. To remove the permission, run
+`sudo rm /etc/sudoers.d/lid-awake` after turning lid-awake off.
+
 ## 📄 License
 
 See `LICENSE` file for details.

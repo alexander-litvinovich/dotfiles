@@ -1,0 +1,30 @@
+#!/bin/bash
+set -euo pipefail
+
+status() {
+  if /usr/bin/pmset -g | /usr/bin/grep -Eq 'SleepDisabled[[:space:]]+1'; then
+    echo 'Lid awake: on (including battery power)'
+  else
+    echo 'Lid awake: off (normal sleep)'
+  fi
+}
+
+case "${1:-status}" in
+  on) value=1 ;;
+  off) value=0 ;;
+  toggle)
+    if /usr/bin/pmset -g | /usr/bin/grep -Eq 'SleepDisabled[[:space:]]+1'; then
+      value=0
+    else
+      value=1
+    fi
+    ;;
+  status) status; exit 0 ;;
+  *) echo 'Usage: lid-awake [on|off|toggle|status]' >&2; exit 2 ;;
+esac
+
+if ! /usr/bin/sudo -n /usr/bin/pmset -a disablesleep "$value"; then
+  echo 'Password-free permission is missing. See the lid-awake setup in README.md.' >&2
+  exit 1
+fi
+status
