@@ -36,6 +36,26 @@ class ZshrcTest(unittest.TestCase):
                 self.assertEqual(result.stdout.splitlines()[-1],
                                  'yes yes' if installed else 'no no')
 
+    def test_nvm_default_node_on_path_without_loading_nvm(self):
+        config = Path(__file__).resolve().parents[1] / 'configs/.zshrc'
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            omz = home / '.oh-my-zsh'
+            omz.mkdir()
+            (omz / 'oh-my-zsh.sh').touch()
+            (home / '.nvm/alias').mkdir(parents=True)
+            (home / '.nvm/alias/default').write_text('20\n')
+            for version in ('v20.9.0', 'v20.19.4', 'v22.1.0'):
+                (home / '.nvm/versions/node' / version / 'bin').mkdir(parents=True)
+            env = dict(os.environ, HOME=tmp, PATH='/usr/bin:/bin')
+            result = subprocess.run(
+                ['/bin/zsh', '-f', '-c',
+                 'source "$1"; print -r -- ${(F)path}; whence -w nvm',
+                 'zsh', str(config)], env=env, text=True, capture_output=True)
+            *paths, nvm = result.stdout.splitlines()
+            self.assertIn(f'{tmp}/.nvm/versions/node/v20.19.4/bin', paths)
+            self.assertEqual(nvm, 'nvm: function')
+
 
 if __name__ == '__main__':
     unittest.main()

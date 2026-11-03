@@ -108,23 +108,18 @@ export LC_CTYPE=en_US.UTF-8
 export PYENV_ROOT="$HOME/.pyenv"
 [[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"
 if command -v pyenv > /dev/null 2>&1; then
-  eval "$(pyenv init -)"
+  eval "$(pyenv init - --no-rehash)"
 fi
 
-# >>> conda initialize >>>
-# !! Contents within this block are managed by 'conda init' !!
-__conda_setup="$('/opt/homebrew/Caskroom/miniconda/base/bin/conda' 'shell.zsh' 'hook' 2> /dev/null)"
-if [ $? -eq 0 ]; then
-    eval "$__conda_setup"
-else
-    if [ -f "/opt/homebrew/Caskroom/miniconda/base/etc/profile.d/conda.sh" ]; then
-        . "/opt/homebrew/Caskroom/miniconda/base/etc/profile.d/conda.sh"
-    else
-        export PATH="/opt/homebrew/Caskroom/miniconda/base/bin:$PATH"
-    fi
+# conda: load the hook on first use. `conda init` here cost ~0.2s per shell and
+# auto-activated base, which this skips.
+if [ -x /opt/homebrew/Caskroom/miniconda/base/bin/conda ]; then
+  conda() {
+    unset -f conda
+    eval "$(/opt/homebrew/Caskroom/miniconda/base/bin/conda shell.zsh hook)"
+    conda "$@"
+  }
 fi
-unset __conda_setup
-# <<< conda initialize <<<
 
 # krew
 export PATH="${KREW_ROOT:-$HOME/.krew}/bin:$PATH"
@@ -137,11 +132,23 @@ export GPG_TTY=$(tty)
 export BUN_INSTALL="$HOME/.bun"
 export PATH="$BUN_INSTALL/bin:$PATH"
 
-#nvm
-
+# nvm: sourcing nvm.sh runs `nvm use default`, ~1.2s per shell. Put the default
+# node on PATH directly and load nvm itself on first `nvm` call.
 export NVM_DIR="$HOME/.nvm"
-[ -s "/opt/homebrew/opt/nvm/nvm.sh" ] && \. "/opt/homebrew/opt/nvm/nvm.sh"  # This loads nvm
-[ -s "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm" ] && \. "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm"  # This loads nvm bash_completion
+() {
+  setopt local_options numeric_glob_sort
+  local default bins
+  [ -r "$NVM_DIR/alias/default" ] || return 0
+  default=$(<"$NVM_DIR/alias/default")
+  bins=("$NVM_DIR"/versions/node/v${default#v}*/bin(N/On[1]))
+  (( $#bins )) && export PATH="$bins[1]:$PATH"
+}
+nvm() {
+  unset -f nvm
+  [ -s "/opt/homebrew/opt/nvm/nvm.sh" ] && \. "/opt/homebrew/opt/nvm/nvm.sh"
+  [ -s "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm" ] && \. "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm"
+  nvm "$@"
+}
 
 # pnpm
 export PNPM_HOME="/Users/alex/Library/pnpm"
