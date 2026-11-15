@@ -1,7 +1,7 @@
 ---
 name: tlg
 description: >
-  Sends one brief Telegram push notification via tlgme when a task finishes,
+  Sends Telegram messages with normal agent-chat formatting via tlgme when a task finishes,
   or blocks on a Telegram question by adding --prompt to a tlgme command when
   the agent needs the user's input. Use when the user invokes /tlg or $tlg,
   asks to notify them in Telegram, send them a message, ping in tlg, or says
@@ -31,7 +31,7 @@ Ping the user on Telegram once, or ask them a question and wait for the reply. N
 ## How to send
 
 ```bash
-tlgme --text "your message here"
+tlgme --text '✅: Fixed <code>login()</code>'
 ```
 
 Run `tlgme` without arguments for first-time setup. Full setup and override
@@ -79,8 +79,8 @@ also accept an HTTP(S) URL, base64 data, a base64 `data:` URI, or `-` for
 stdin. Use `--filename report.pdf` with stdin or base64 when the displayed
 filename matters.
 
-`--text` becomes the attachment caption. Keep it to one short line and under
-1024 characters; detailed results stay in chat. `--image` falls back to a
+`--text` becomes the attachment caption. Keep routine captions brief and within
+1024 characters after formatting is parsed; detailed results stay in chat. `--image` falls back to a
 file with a warning when the upload exceeds 10 MB or is not an image.
 
 ## First-time setup
@@ -130,7 +130,7 @@ answer=$(tlgme --text "Does this look right?" --image /tmp/preview.png \
 
 Use `--text "question" --prompt` without `--button` for a free-form answer.
 
-Use this only when you truly need their input; keep using a plain `tlgme` message for completion pings.
+Use this only when you truly need their input; use a one-way send without `--prompt` for completion pings.
 
 ### Sending a plan or proposal for approval
 
@@ -140,11 +140,15 @@ When the user asks you to send a plan, proposal, or set of changes to Telegram f
 answer=$(tlgme --text "Plan ready: migrate auth to OAuth in 3 steps. Approve?" --prompt --button Approve --button "Request changes")
 ```
 
-Summarize the plan in one short line in the `--text`; the full plan stays in chat.
+Use a brief summary in `--text`, with short formatted lines when they help the
+user decide. Keep the full plan in chat unless the user asks for it in Telegram.
 
 ## Message content
 
-One short plain-text line. Telegram gets plain text only (no markdown).
+Write agent-authored Telegram messages with the same formatting you would use
+in the agent chat. Translate that formatting into Telegram HTML before sending;
+tlgme does not convert Markdown automatically. This applies to completion pings,
+questions, proposals, and attachment captions.
 
 | Situation                             | Message                                                |
 | ------------------------------------- | ------------------------------------------------------ |
@@ -153,7 +157,68 @@ One short plain-text line. Telegram gets plain text only (no markdown).
 | User gave text after `/tlg` or `$tlg` | Send that text **verbatim**                            |
 | `/tlg` or `$tlg` with no extra text   | Brief status of the current task (same rules as above) |
 
-Keep it push-notification sized: a few words to one short sentence. No stack traces, diffs, or multi-paragraph summaries.
+Keep routine notifications push-sized. Use a few short lines for a summary or
+proposal when helpful, and longer content only when requested. Keep stack
+traces and diffs in chat or attachments.
+
+### Formatting
+
+HTML parsing is enabled by default, so use `tlgme --text` without an extra
+formatting flag for agent-authored messages. Preserve the
+meaning and structure of normal chat formatting with these equivalents:
+
+| In agent chat | In Telegram HTML |
+| --- | --- |
+| Inline code, including commit hashes, commands, paths, branches, and identifiers | `<code>...</code>` |
+| Code blocks and multiline output | `<pre>...</pre>` or `<pre><code class="language-python">...</code></pre>` |
+| Bold emphasis or short headings | `<b>...</b>` |
+| Italic emphasis | `<i>...</i>` |
+| Strikethrough | `<s>...</s>` |
+| Links with readable labels | `<a href="URL">label</a>` |
+| Quotes | `<blockquote>...</blockquote>` |
+| Spoilers | `<tg-spoiler>...</tg-spoiler>` |
+| Lists and paragraphs | Literal newlines, `•` bullets, or numbered lines |
+
+Use the formatting the content calls for, just as in chat. A brief plain sentence
+can still be sent with the default HTML mode; decorative tags are not required. Adapt Markdown
+headings to bold text and tables to short lists or preformatted text because
+ordinary Telegram messages do not support heading or table tags. More tags are
+listed in [Telegram's formatting reference](https://core.telegram.org/bots/api#formatting-options).
+
+For example, if the user requests the final commit hash in a completion ping,
+format it as code, just as you would in chat:
+
+```bash
+tlgme --text '✅: Formatting support ready.
+Commit: <code>db1241cfa143b331e6da354648c2761bb3df6f89</code>
+<a href="https://github.com/bettertomorrow-dev/tlgme/pull/39">PR #39</a>'
+```
+
+Replace the example hash and URL with the actual results. Include identifiers
+only when requested or useful to the task.
+
+Escape dynamic text before inserting it into HTML: `&` becomes `&amp;`, `<`
+becomes `&lt;`, `>` becomes `&gt;`, and attribute quotes become `&quot;`.
+Only Telegram's supported tags work. The single-quoted shell example keeps
+backticks and `$` literal; for text containing apostrophes, pass a safely quoted
+variable or a quoted heredoc instead of interpolating it into shell code.
+
+`--parse-mode MarkdownV2` is also supported, but uses Telegram-specific syntax
+and escaping, not ordinary Markdown. Use it when explicitly requested; otherwise
+translate chat formatting into HTML.
+
+The mode applies to messages, attachment captions, and prompt-answer edits.
+Button labels are literal text and are escaped when appended to a formatted
+question. Use `--parse-mode plain` when forwarding the user's verbatim text or
+when they request plain text, unless they explicitly request a formatting mode.
+
+Telegram permits 4096 characters per message and 1024 per caption after
+formatting is parsed. It validates formatted lengths and malformed markup;
+`--dry-run` reports the mode but cannot validate Telegram's parsing. An API
+error is a failed send, not a reason to silently resend plain text. If the installed
+CLI lacks default HTML support, use an updated local build when the checkout is
+available. Otherwise report that the installed version needs updating. Preserve
+the intended formatting instead of silently falling back to a plain-text send.
 
 ## Errors
 
@@ -164,7 +229,7 @@ If `tlgme` exits non-zero (including a `--prompt` timeout), tell the user once i
 **After fixing a bug (user said "ping me in tlg when done"):**
 
 ```bash
-tlgme --text "Done: fixed login redirect loop"
+tlgme --text '✅: Fixed <code>login()</code> redirect loop'
 ```
 
 **Immediate ping with custom text:**
@@ -172,7 +237,7 @@ tlgme --text "Done: fixed login redirect loop"
 User: `$tlg tests green on main`
 
 ```bash
-tlgme --text "tests green on main"
+tlgme --parse-mode plain --text "tests green on main"
 ```
 
 **Need a decision before continuing (user is away from chat):**
