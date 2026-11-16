@@ -1,0 +1,6 @@
+interface:
+  display_name: "Ship it"
+  short_description: "Review, prepare, or merge current changes"
+  default_prompt: "Use $ship-it to commit, push, open a PR, review and fix it, then merge; use prep or p to leave it open."
+policy:
+  allow_implicit_invocation: false
