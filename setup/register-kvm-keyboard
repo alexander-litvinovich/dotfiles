@@ -1,0 +1,34 @@
+#!/bin/bash
+set -euo pipefail
+
+# WWW.WCH.CN / WCH UART TO KB-MS_V1.8, VID 0x1a86, PID 0xe229.
+# macOS stores decimal ProductID-VendorID-CountryCode identifiers.
+plist=/Library/Preferences/com.apple.keyboardtype.plist
+key=57897-6790-0
+
+case "${1:-ansi}" in
+  ansi) type=40 ;;
+  iso) type=41 ;;
+  jis) type=42 ;;
+  *) echo 'Usage: register-kvm-keyboard [ansi|iso|jis]' >&2; exit 2 ;;
+esac
+if [[ $# -gt 1 || "$(/usr/bin/uname -s)" != Darwin ]]; then
+  echo 'Run on macOS with at most one keyboard type argument.' >&2
+  exit 2
+fi
+
+current=$(/usr/libexec/PlistBuddy -c "Print :keyboardtype:$key" "$plist" 2>/dev/null || true)
+if [[ "$current" != "$type" ]]; then
+  if [[ -f "$plist" ]]; then
+    backup=$(/usr/bin/sudo /usr/bin/mktemp "${plist}.backup.XXXXXX")
+    /usr/bin/sudo /bin/cp -p "$plist" "$backup"
+    echo "Backup: $backup"
+  fi
+  /usr/bin/sudo /usr/bin/defaults write "$plist" keyboardtype -dict-add "$key" -int "$type"
+fi
+
+[[ "$(/usr/libexec/PlistBuddy -c "Print :keyboardtype:$key" "$plist")" == "$type" ]]
+echo "KVM keyboard $key registered as ${1:-ansi} ($type)."
+# Close the existing dialog, which may predate the saved registration.
+/usr/bin/pkill -u "${SUDO_UID:-$UID}" -x KeyboardSetupAssistant || [[ $? -eq 1 ]]
+echo 'Switch the KVM away and back. If the dialog returns, restart this Mac.'

@@ -103,7 +103,7 @@ or `2` for "my Mac" to install base + etc.
 
 ### `bin/`
 
-Custom utility scripts for everyday tasks:
+Shared utilities used regularly on both Macs:
 
 #### `ocrgrab.sh`
 
@@ -130,6 +130,35 @@ through the Brewfile. Run `tlgme` in a terminal for first-time setup. Use
 a reply. The bundled `/tlg` skill uses this CLI. See the
 [TlgMe README](https://github.com/bettertomorrow-dev/tlgme#readme) for setup
 and usage, including images and file attachments.
+
+### `setup/`
+
+Scripts run once per machine to configure hardware or system settings. Run
+these explicitly on each Mac that needs them.
+
+#### `register-kvm-keyboard`
+
+Register the WWW.WCH.CN KVM keyboard on each Mac and close Keyboard Setup
+Assistant:
+
+```bash
+./setup/register-kvm-keyboard
+```
+
+The default is ANSI. Use `./setup/register-kvm-keyboard iso` for an ISO keyboard
+or `./setup/register-kvm-keyboard jis` for a Japanese JIS keyboard. This changes
+the physical keyboard type, not the input language.
+
+The script registers USB vendor `0x1a86`, product `0xe229`, country code `0`
+as `57897-6790-0` in `/Library/Preferences/com.apple.keyboardtype.plist`.
+It preserves other registrations and backs up the plist before a change.
+Run it as your normal user; it requests sudo only when a change is needed.
+The device does not need to be connected during registration.
+
+Switch the KVM away and back after running it. Restart the Mac if the dialog
+returns. Registration uses an undocumented macOS preference, so a future
+macOS release may change its behavior. See
+[Fraser Hess's investigation](https://macadmin.fraserhess.com/2023/01/29/suppressing-keyboard-setup-assistant/).
 
 ### `configs/`
 
