@@ -1,0 +1,6 @@
+interface:
+  display_name: "Rundevrun domain setup wizard"
+  short_description: "Guided private-domain setup for macOS and Linux"
+  default_prompt: "Use $rundevrun-domain-setup-wizard to configure my project domain through Cloudflare and Tailscale."
+policy:
+  allow_implicit_invocation: false
